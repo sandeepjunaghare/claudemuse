@@ -142,16 +142,27 @@ async def lookup_order(args: dict[str, Any]) -> dict[str, Any]:
             f"Order {order_id} is not associated with customer {customer_id}."
         )
 
-    text = (
-        f"Order {order['id']}: status {order['status']}, total ${order['total']:.2f}, "
-        f"placed {order['placed_at']}."
-    )
+    # TR9b trim: the backend hands back a 40+-field verbose record; we project it
+    # down to the ~5 fields that matter. The verbose tail (warehouse_id, risk_score,
+    # ip_address, internal_flags, payment_last4, ...) is never placed in the content
+    # text or structuredContent, so it never reaches the model. The existence/owner
+    # check above still uses the canonical slim `order`; values here match it.
+    detail = fixtures.get_order_verbose(order_id) or order
+    status = detail.get("status", order["status"])
+    total = detail.get("total", order["total"])
+    placed_at = detail.get("placed_at", order["placed_at"])
+    tracking = detail.get("tracking_number")
+
+    # Text contract is UNCHANGED — `placed <date>.` stays the final segment so the
+    # TR5 `normalize_order_dates` hook and the `case_facts_recorder` keep parsing it.
+    text = f"Order {order['id']}: status {status}, total ${total:.2f}, placed {placed_at}."
     structured = {
         "found": True,
         "orderId": order["id"],
-        "status": order["status"],
-        "total": order["total"],
-        "placedAt": order["placed_at"],  # heterogeneous format; normalized in Phase 2 (TR5)
+        "status": status,
+        "total": total,
+        "placedAt": placed_at,  # heterogeneous format; normalized in the text by TR5
+        "trackingNumber": tracking,  # the one genuinely-useful extra kept by the trim
     }
     return _result(text, structured)
 

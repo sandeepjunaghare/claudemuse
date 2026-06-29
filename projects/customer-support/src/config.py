@@ -35,6 +35,12 @@ FLAKY_503_PROBABILITY = 0.10
 #: behavior guidance (probabilistic), not an enforced cap.
 MAX_TRANSIENT_RETRIES = 3
 
+#: First line of the case-facts block injected every prompt (TR9a). Single source
+#: of truth so the renderer and the tests agree on the exact header text. The
+#: "verbatim, do not paraphrase" wording tells the model these figures are
+#: authoritative and must not be rounded or reworded.
+CASE_FACTS_HEADER = "CASE FACTS (verbatim, do not paraphrase):"
+
 # --- Env loading -----------------------------------------------------------
 
 #: Workspace-root .env: projects/customer-support/src/config.py -> ../../../.env

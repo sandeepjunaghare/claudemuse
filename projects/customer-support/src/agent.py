@@ -10,6 +10,8 @@ from their descriptions (TR2).
 from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
 import config
+from hooks.case_facts_inject import case_facts_inject
+from hooks.case_facts_recorder import case_facts_recorder
 from hooks.handoff_gate import handoff_gate
 from hooks.normalize import normalize_order_dates
 from hooks.prerequisite_gate import prerequisite_gate, record_verified_customer
@@ -42,6 +44,9 @@ who they are. Never guess between multiple matches.
 refunds are not something you can do yourself — route them to a human.
 - Escalate to a human when the customer explicitly asks for one, when policy is \
 silent or ambiguous, or when you genuinely cannot make progress.
+- If a customer's message contains more than one request, resolve each one and \
+combine the results into a single, clearly organized reply rather than answering \
+only the first.
 
 Handling tool errors:
 - If a tool reports a *transient* error (e.g. an HTTP 503 / "temporarily \
@@ -111,7 +116,14 @@ def _build_hooks() -> dict:
             HookMatcher(matcher=customer, hooks=[record_verified_customer]),
             # TR5: normalize the order date to ISO 8601 before the model reads it.
             HookMatcher(matcher=order, hooks=[normalize_order_dates]),
+            # TR9a writer: record case facts (customer/order/refund) from tool text.
+            # Never denies/rewrites, so it cannot regress any deterministic guarantee.
+            HookMatcher(matcher=f"{customer}|{order}|{refund}", hooks=[case_facts_recorder]),
         ],
+        # TR9a inject: re-supply the case-facts block on EVERY prompt via
+        # additionalContext (non-tool event — no matcher). Returns {} on an empty
+        # store, so single-shot Phase 1-3 runs are unaffected.
+        "UserPromptSubmit": [HookMatcher(hooks=[case_facts_inject])],
     }
 
 

@@ -58,6 +58,37 @@ class AgentRun:
         return bool(self.subtype and "max_turns" in self.subtype)
 
 
+def _ingest_message(message, run: AgentRun, text_parts: list[str]) -> Optional[str]:
+    """Accumulate one streamed message into `run`/`text_parts`.
+
+    Shared by `run_turn` (one-shot `query()`) and `session.run_conversation`
+    (persistent `ClaudeSDKClient`) so tool-call/text/result parsing is identical
+    across both drivers. Records every tool-use block + assistant text; on the
+    FIRST `ResultMessage` records the terminal metadata and returns its `result`
+    text (or `None`). Only the first ResultMessage is recorded (guarded by
+    `terminated_by_result`), so a per-turn `run` must start with that flag False.
+    """
+    if isinstance(message, AssistantMessage):
+        for block in message.content:
+            if isinstance(block, ToolUseBlock):
+                run.raw_tool_calls.append(block.name)
+                run.tool_calls.append(_bare_tool_name(block.name))
+                run.tool_inputs.append(block.input or {})
+            elif isinstance(block, TextBlock):
+                if block.text:
+                    text_parts.append(block.text)
+    elif isinstance(message, ResultMessage) and not run.terminated_by_result:
+        run.subtype = message.subtype
+        run.stop_reason = getattr(message, "stop_reason", None)
+        run.is_error = bool(message.is_error)
+        run.num_turns = getattr(message, "num_turns", None)
+        run.terminated_by_result = True
+        # ResultMessage.result carries the canonical final answer when present.
+        if getattr(message, "result", None):
+            return str(message.result)
+    return None
+
+
 async def run_turn(prompt: str, options: ClaudeAgentOptions) -> AgentRun:
     """Drive one agent turn to completion and return a structured `AgentRun`.
 
@@ -74,24 +105,9 @@ async def run_turn(prompt: str, options: ClaudeAgentOptions) -> AgentRun:
     # "aclose(): asynchronous generator is already running". The ResultMessage is
     # the terminal message, so we record the first one and let iteration end.
     async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, ToolUseBlock):
-                    run.raw_tool_calls.append(block.name)
-                    run.tool_calls.append(_bare_tool_name(block.name))
-                    run.tool_inputs.append(block.input or {})
-                elif isinstance(block, TextBlock):
-                    if block.text:
-                        text_parts.append(block.text)
-        elif isinstance(message, ResultMessage) and not run.terminated_by_result:
-            run.subtype = message.subtype
-            run.stop_reason = getattr(message, "stop_reason", None)
-            run.is_error = bool(message.is_error)
-            run.num_turns = getattr(message, "num_turns", None)
-            run.terminated_by_result = True
-            # ResultMessage.result carries the canonical final answer when present.
-            if getattr(message, "result", None):
-                result_text = str(message.result)
+        rt = _ingest_message(message, run, text_parts)
+        if rt is not None:
+            result_text = rt
 
     # Prefer the ResultMessage's final answer; fall back to streamed text blocks.
     run.final_text = (result_text or "\n".join(text_parts)).strip()

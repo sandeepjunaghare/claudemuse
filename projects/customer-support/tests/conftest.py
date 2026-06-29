@@ -16,7 +16,13 @@ _SRC = _PROJECT_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+# Also expose the tests dir so data-only helpers (e.g. `scenarios`) import flat.
+_TESTS = Path(__file__).resolve().parent
+if str(_TESTS) not in sys.path:
+    sys.path.insert(0, str(_TESTS))
+
 import config  # noqa: E402  (after sys.path setup)
+from context import case_facts  # noqa: E402  (SDK-free; safe without the API)
 from hooks import verified_store  # noqa: E402  (SDK-free; safe without the API)
 from mocks import fixtures  # noqa: E402  (SDK-free; safe without the API)
 
@@ -33,6 +39,19 @@ def _reset_verified_store():
     verified_store.reset()
     yield
     verified_store.reset()
+
+
+@pytest.fixture(autouse=True)
+def _reset_case_facts():
+    """Clear the process-global case-facts store before each test (TR9a).
+
+    Like `verified_store`, the case-facts store is keyed by session_id but shared
+    across the process; resetting per test prevents facts from one conversation
+    leaking into the next (live and unit alike).
+    """
+    case_facts.reset()
+    yield
+    case_facts.reset()
 
 
 @pytest.fixture(autouse=True)
@@ -75,5 +94,21 @@ def run_agent():
 
     async def _run(prompt: str):
         return await run_turn(prompt, build_options())
+
+    return _run
+
+
+@pytest.fixture
+def run_conversation():
+    """Return an async callable that drives a multi-turn conversation (Phase 4).
+
+    Lazy-imports the SDK-backed driver (like `run_agent`) so the deterministic
+    suite (`-m "not integration"`) never imports the Agent SDK at collection time.
+    """
+    from agent import build_options
+    from session import run_conversation as _run_conversation
+
+    async def _run(prompts: list[str]):
+        return await _run_conversation(prompts, build_options())
 
     return _run
