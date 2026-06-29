@@ -1,0 +1,211 @@
+
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Prompt Evaluation Report</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+                margin: 0;
+                padding: 20px;
+                color: #333;
+            }
+            .header {
+                background-color: #f0f0f0;
+                padding: 20px;
+                border-radius: 5px;
+                margin-bottom: 20px;
+            }
+            .summary-stats {
+                display: flex;
+                justify-content: space-between;
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+            .stat-box {
+                background-color: #fff;
+                border-radius: 5px;
+                padding: 15px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                flex-basis: 30%;
+                min-width: 200px;
+            }
+            .stat-value {
+                font-size: 24px;
+                font-weight: bold;
+                margin-top: 5px;
+            }
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 20px;
+            }
+            th {
+                background-color: #4a4a4a;
+                color: white;
+                text-align: left;
+                padding: 12px;
+            }
+            td {
+                padding: 10px;
+                border-bottom: 1px solid #ddd;
+                vertical-align: top;
+            }
+            tr:nth-child(even) {
+                background-color: #f9f9f9;
+            }
+            .output-cell {
+                white-space: pre-wrap;
+            }
+            .score {
+                font-weight: bold;
+                padding: 5px 10px;
+                border-radius: 3px;
+                display: inline-block;
+            }
+            .score-high {
+                background-color: #c8e6c9;
+                color: #2e7d32;
+            }
+            .score-medium {
+                background-color: #fff9c4;
+                color: #f57f17;
+            }
+            .score-low {
+                background-color: #ffcdd2;
+                color: #c62828;
+            }
+            .output {
+                overflow: auto;
+                white-space: pre-wrap;
+            }
+
+            .output pre {
+                background-color: #f5f5f5;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 10px;
+                margin: 0;
+                font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                font-size: 14px;
+                line-height: 1.4;
+                color: #333;
+                box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+                overflow-x: auto;
+                white-space: pre-wrap; 
+                word-wrap: break-word; 
+            }
+
+            td {
+                width: 20%;
+            }
+            .score-col {
+                width: 80px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>Prompt Evaluation Report</h1>
+            <div class="summary-stats">
+                <div class="stat-box">
+                    <div>Total Test Cases</div>
+                    <div class="stat-value">3</div>
+                </div>
+                <div class="stat-box">
+                    <div>Average Score</div>
+                    <div class="stat-value">8.3 / 10</div>
+                </div>
+                <div class="stat-box">
+                    <div>Pass Rate (≥7)</div>
+                    <div class="stat-value">100.0%</div>
+                </div>
+            </div>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Scenario</th>
+                    <th>Prompt Inputs</th>
+                    <th>Solution Criteria</th>
+                    <th>Output</th>
+                    <th>Score</th>
+                    <th>Reasoning</th>
+                </tr>
+            </thead>
+            <tbody>
+    
+            <tr>
+                <td>Testing with a brief technical biology passage containing domain-specific terminology (genes, proteins, phenotypes) to assess extraction of specialized scientific topics</td>
+                <td class="prompt-inputs"><strong>content:</strong> Recent studies have demonstrated that mutations in the BRCA1 gene significantly increase susceptibility to breast cancer through impaired DNA repair mechanisms. The resulting protein variants exhibit reduced binding affinity to RAD51, a critical component of homologous recombination pathways. This molecular dysfunction manifests as a pleiotropic phenotype characterized by genomic instability, increased mutation accumulation, and altered cell cycle checkpoint control. Furthermore, epigenetic modifications including DNA methylation patterns at promoter regions modulate BRCA1 expression levels, creating complex gene-environment interactions that influence cancer risk stratification across diverse populations.</td>
+                <td class="criteria">• Extracts all major scientific topics including genes (BRCA1), proteins (RAD51), cellular processes (DNA repair, homologous recombination), and phenotypic outcomes (genomic instability, cancer susceptibility)<br>• Returns results as a JSON array of strings with appropriate domain-specific terminology preserved<br>• Omits non-topical words and focuses on substantive scientific concepts rather than generic terms</td>
+                <td class="output"><pre>```json
+["BRCA1 gene mutations", "DNA repair mechanisms", "Homologous recombination", "RAD51 protein", "Genomic instability", "Cell cycle checkpoints", "Epigenetic modifications", "DNA methylation", "Gene-environment interactions", "Cancer susceptibility", "Pleiotropic phenotypes", "Mutation accumulation", "Protein binding affinity"]
+```</pre></td>
+                <td class="score-col"><span class="score score-high">9</span></td>
+                <td class="reasoning">The solution meets all mandatory requirements: it is a valid JSON array of strings containing topics from the article with no extra commentary. It comprehensively extracts major scientific topics across genes, proteins, cellular processes, and phenotypic outcomes as specified in the secondary criteria. The terminology is appropriately domain-specific and substantive. The only minor weakness is the inclusion of 'Pleiotropic phenotypes' which is somewhat generic/descriptive rather than a concrete topic, but this is a marginal issue that doesn't significantly detract from an otherwise excellent extraction.</td>
+            </tr>
+        
+            <tr>
+                <td>Testing with a humanities passage containing overlapping themes like philosophy, ethics, and historical context to evaluate handling of interconnected abstract concepts</td>
+                <td class="prompt-inputs"><strong>content:</strong> Kant's categorical imperative emerged from Enlightenment rationalism yet remained deeply rooted in Christian moral theology, creating a philosophical tension that medieval scholastics would have recognized. His deontological framework rejected consequentialist ethics prevalent in utilitarian thought, arguing instead that moral worth derives from duty rather than outcomes. This position fundamentally challenged the empiricist traditions of Hume and Locke, who grounded ethics in sentiment and experience. The historical context of Prussian intellectual culture, combined with Kant's engagement with contemporary debates on free will and determinism, shaped his conviction that reason alone could establish universal moral laws applicable across all rational beings, regardless of their particular circumstances or desires.</td>
+                <td class="criteria">• Extracts all major philosophical concepts and schools of thought mentioned (e.g., categorical imperative, deontological ethics, utilitarianism, empiricism)<br>• Captures overlapping themes that span multiple domains, such as historical context connecting to philosophical positions<br>• Distinguishes between distinct but related abstract concepts (e.g., duty vs. outcomes, reason vs. sentiment)<br>• Returns results as a JSON array of strings with no extraneous formatting</td>
+                <td class="output"><pre>```json
+[
+  "Categorical Imperative",
+  "Enlightenment Rationalism",
+  "Christian Moral Theology",
+  "Deontological Ethics",
+  "Consequentialist Ethics",
+  "Utilitarianism",
+  "Moral Duty",
+  "Empiricism",
+  "Sentiment-based Ethics",
+  "Free Will and Determinism",
+  "Universal Moral Laws",
+  "Reason and Morality",
+  "Rational Agency"
+]
+```</pre></td>
+                <td class="score-col"><span class="score score-medium">7</span></td>
+                <td class="reasoning">The solution meets all mandatory requirements: it is a valid JSON array of strings containing topics, with no extra commentary, and nothing else in the response. It successfully extracts the major philosophical concepts and schools of thought. However, it has minor deficiencies in comprehensiveness—it omits two explicitly mentioned topics (Prussian Intellectual Culture and Medieval Scholasticism) that represent important contextual and historical themes spanning multiple domains. Additionally, 'Rational Agency' appears to be an inference not directly stated in the text. These are secondary criteria issues that prevent a perfect score, but the core requirements are solidly met.</td>
+            </tr>
+        
+            <tr>
+                <td>Testing with a multi-disciplinary passage mixing social science, statistics, and policy discussion to evaluate topic extraction when subjects span different academic fields</td>
+                <td class="prompt-inputs"><strong>content:</strong> Recent longitudinal studies examining income inequality have employed hierarchical linear modeling to assess wage trajectories across demographic cohorts, revealing statistically significant disparities (p < 0.001) in earnings growth rates. These findings have prompted policy debates regarding minimum wage legislation, with economists presenting conflicting analyses on employment elasticity. Simultaneously, sociological research emphasizes the role of social capital and educational access in intergenerational mobility, while labor economists argue that technological displacement and globalization constitute primary drivers of wage stagnation. Regression discontinuity designs applied to natural experiments in tax policy have provided quasi-experimental evidence supporting targeted interventions, though implementation challenges and political feasibility remain contested across stakeholder groups.</td>
+                <td class="criteria">• Extracts topics spanning at least three distinct academic disciplines (e.g., statistics/econometrics, policy/economics, and sociology)<br>• Identifies both methodological topics (statistical techniques) and substantive topics (phenomena being studied)<br>• Returns output as a JSON array of strings with no extraneous fields or explanations</td>
+                <td class="output"><pre>```json
+[
+  "Income inequality",
+  "Hierarchical linear modeling",
+  "Wage trajectories",
+  "Earnings disparities",
+  "Minimum wage legislation",
+  "Employment elasticity",
+  "Social capital",
+  "Educational access",
+  "Intergenerational mobility",
+  "Technological displacement",
+  "Globalization",
+  "Wage stagnation",
+  "Regression discontinuity design",
+  "Natural experiments",
+  "Tax policy",
+  "Quasi-experimental evidence",
+  "Policy implementation"
+]
+```</pre></td>
+                <td class="score-col"><span class="score score-high">9</span></td>
+                <td class="reasoning">The solution fully satisfies all mandatory requirements: it is a valid JSON array of strings containing topics from the passage, with clean formatting and no extraneous commentary. It meets all secondary criteria by identifying methodological topics (hierarchical linear modeling, regression discontinuity design, quasi-experimental evidence), substantive topics (income inequality, wage trajectories, intergenerational mobility), and spanning at least three distinct disciplines (econometrics, economics/policy, and sociology). While a few minor topics could have been included for completeness, the solution demonstrates strong coverage of the passage's key concepts and disciplinary breadth. The extraction is accurate and well-organized.</td>
+            </tr>
+        
+            </tbody>
+        </table>
+    </body>
+    </html>
+    

@@ -1,0 +1,54 @@
+[
+  {
+    "output": "```json\n[\"BRCA1 gene mutations\", \"DNA repair mechanisms\", \"Homologous recombination\", \"RAD51 protein\", \"Genomic instability\", \"Cell cycle checkpoints\", \"Epigenetic modifications\", \"DNA methylation\", \"Gene-environment interactions\", \"Cancer susceptibility\", \"Pleiotropic phenotypes\", \"Mutation accumulation\", \"Protein binding affinity\"]\n```",
+    "test_case": {
+      "prompt_inputs": {
+        "content": "Recent studies have demonstrated that mutations in the BRCA1 gene significantly increase susceptibility to breast cancer through impaired DNA repair mechanisms. The resulting protein variants exhibit reduced binding affinity to RAD51, a critical component of homologous recombination pathways. This molecular dysfunction manifests as a pleiotropic phenotype characterized by genomic instability, increased mutation accumulation, and altered cell cycle checkpoint control. Furthermore, epigenetic modifications including DNA methylation patterns at promoter regions modulate BRCA1 expression levels, creating complex gene-environment interactions that influence cancer risk stratification across diverse populations."
+      },
+      "solution_criteria": [
+        "Extracts all major scientific topics including genes (BRCA1), proteins (RAD51), cellular processes (DNA repair, homologous recombination), and phenotypic outcomes (genomic instability, cancer susceptibility)",
+        "Returns results as a JSON array of strings with appropriate domain-specific terminology preserved",
+        "Omits non-topical words and focuses on substantive scientific concepts rather than generic terms"
+      ],
+      "task_description": "Extract topics out of a passage ot text from a scholarly article into a JSON array of strings",
+      "scenario": "Testing with a brief technical biology passage containing domain-specific terminology (genes, proteins, phenotypes) to assess extraction of specialized scientific topics"
+    },
+    "score": 9,
+    "reasoning": "The solution meets all mandatory requirements: it is a valid JSON array of strings containing topics from the article with no extra commentary. It comprehensively extracts major scientific topics across genes, proteins, cellular processes, and phenotypic outcomes as specified in the secondary criteria. The terminology is appropriately domain-specific and substantive. The only minor weakness is the inclusion of 'Pleiotropic phenotypes' which is somewhat generic/descriptive rather than a concrete topic, but this is a marginal issue that doesn't significantly detract from an otherwise excellent extraction."
+  },
+  {
+    "output": "```json\n[\n  \"Categorical Imperative\",\n  \"Enlightenment Rationalism\",\n  \"Christian Moral Theology\",\n  \"Deontological Ethics\",\n  \"Consequentialist Ethics\",\n  \"Utilitarianism\",\n  \"Moral Duty\",\n  \"Empiricism\",\n  \"Sentiment-based Ethics\",\n  \"Free Will and Determinism\",\n  \"Universal Moral Laws\",\n  \"Reason and Morality\",\n  \"Rational Agency\"\n]\n```",
+    "test_case": {
+      "prompt_inputs": {
+        "content": "Kant's categorical imperative emerged from Enlightenment rationalism yet remained deeply rooted in Christian moral theology, creating a philosophical tension that medieval scholastics would have recognized. His deontological framework rejected consequentialist ethics prevalent in utilitarian thought, arguing instead that moral worth derives from duty rather than outcomes. This position fundamentally challenged the empiricist traditions of Hume and Locke, who grounded ethics in sentiment and experience. The historical context of Prussian intellectual culture, combined with Kant's engagement with contemporary debates on free will and determinism, shaped his conviction that reason alone could establish universal moral laws applicable across all rational beings, regardless of their particular circumstances or desires."
+      },
+      "solution_criteria": [
+        "Extracts all major philosophical concepts and schools of thought mentioned (e.g., categorical imperative, deontological ethics, utilitarianism, empiricism)",
+        "Captures overlapping themes that span multiple domains, such as historical context connecting to philosophical positions",
+        "Distinguishes between distinct but related abstract concepts (e.g., duty vs. outcomes, reason vs. sentiment)",
+        "Returns results as a JSON array of strings with no extraneous formatting"
+      ],
+      "task_description": "Extract topics out of a passage ot text from a scholarly article into a JSON array of strings",
+      "scenario": "Testing with a humanities passage containing overlapping themes like philosophy, ethics, and historical context to evaluate handling of interconnected abstract concepts"
+    },
+    "score": 7,
+    "reasoning": "The solution meets all mandatory requirements: it is a valid JSON array of strings containing topics, with no extra commentary, and nothing else in the response. It successfully extracts the major philosophical concepts and schools of thought. However, it has minor deficiencies in comprehensiveness\u2014it omits two explicitly mentioned topics (Prussian Intellectual Culture and Medieval Scholasticism) that represent important contextual and historical themes spanning multiple domains. Additionally, 'Rational Agency' appears to be an inference not directly stated in the text. These are secondary criteria issues that prevent a perfect score, but the core requirements are solidly met."
+  },
+  {
+    "output": "```json\n[\n  \"Income inequality\",\n  \"Hierarchical linear modeling\",\n  \"Wage trajectories\",\n  \"Earnings disparities\",\n  \"Minimum wage legislation\",\n  \"Employment elasticity\",\n  \"Social capital\",\n  \"Educational access\",\n  \"Intergenerational mobility\",\n  \"Technological displacement\",\n  \"Globalization\",\n  \"Wage stagnation\",\n  \"Regression discontinuity design\",\n  \"Natural experiments\",\n  \"Tax policy\",\n  \"Quasi-experimental evidence\",\n  \"Policy implementation\"\n]\n```",
+    "test_case": {
+      "prompt_inputs": {
+        "content": "Recent longitudinal studies examining income inequality have employed hierarchical linear modeling to assess wage trajectories across demographic cohorts, revealing statistically significant disparities (p < 0.001) in earnings growth rates. These findings have prompted policy debates regarding minimum wage legislation, with economists presenting conflicting analyses on employment elasticity. Simultaneously, sociological research emphasizes the role of social capital and educational access in intergenerational mobility, while labor economists argue that technological displacement and globalization constitute primary drivers of wage stagnation. Regression discontinuity designs applied to natural experiments in tax policy have provided quasi-experimental evidence supporting targeted interventions, though implementation challenges and political feasibility remain contested across stakeholder groups."
+      },
+      "solution_criteria": [
+        "Extracts topics spanning at least three distinct academic disciplines (e.g., statistics/econometrics, policy/economics, and sociology)",
+        "Identifies both methodological topics (statistical techniques) and substantive topics (phenomena being studied)",
+        "Returns output as a JSON array of strings with no extraneous fields or explanations"
+      ],
+      "task_description": "Extract topics out of a passage ot text from a scholarly article into a JSON array of strings",
+      "scenario": "Testing with a multi-disciplinary passage mixing social science, statistics, and policy discussion to evaluate topic extraction when subjects span different academic fields"
+    },
+    "score": 9,
+    "reasoning": "The solution fully satisfies all mandatory requirements: it is a valid JSON array of strings containing topics from the passage, with clean formatting and no extraneous commentary. It meets all secondary criteria by identifying methodological topics (hierarchical linear modeling, regression discontinuity design, quasi-experimental evidence), substantive topics (income inequality, wage trajectories, intergenerational mobility), and spanning at least three distinct disciplines (econometrics, economics/policy, and sociology). While a few minor topics could have been included for completeness, the solution demonstrates strong coverage of the passage's key concepts and disciplinary breadth. The extraction is accurate and well-organized."
+  }
+]
