@@ -53,6 +53,16 @@ def test_heterogeneous_date_formats_preserved():
     assert fixtures.get_order("O1003")["placed_at"] == "2025-03-15T14:30:00Z"
 
 
-def test_flaky_endpoint_inert_in_phase1():
-    assert fixtures.FLAKY_503_ENABLED is False
-    assert fixtures.maybe_fail_transient() is None
+def test_flaky_seam_is_deterministic():
+    """Phase 3 (TR6): the forced-failure seam drives transient 503s deterministically.
+
+    `force_transient_failures(n)` makes the next n `maybe_fail_transient()` calls
+    return True, then it returns to the probabilistic path — which the autouse
+    `_reset_flaky` fixture pins OFF during the suite, so subsequent calls are False.
+    (The production default `FLAKY_503_ENABLED = True` lives in source; tests
+    deliberately neutralize the random path for reproducibility.)
+    """
+    fixtures.force_transient_failures(2)
+    assert fixtures.maybe_fail_transient() is True
+    assert fixtures.maybe_fail_transient() is True
+    assert fixtures.maybe_fail_transient() is False

@@ -25,6 +25,16 @@ MCP_SERVER_NAME = "support"
 #: PreToolUse hook imports a single source of truth.
 REFUND_POLICY_LIMIT = 500.0
 
+#: Probability the flaky order backend returns a transient 503 on a live run (TR6).
+#: Unit tests force transient failures deterministically via the fixtures seam;
+#: this probabilistic path is only exercised in live runs.
+FLAKY_503_PROBABILITY = 0.10
+
+#: Soft hint surfaced in the system prompt for how many times to retry a transient
+#: error before giving up. The HARD bound is always `MAX_TURNS_BACKSTOP` — this is
+#: behavior guidance (probabilistic), not an enforced cap.
+MAX_TRANSIENT_RETRIES = 3
+
 # --- Env loading -----------------------------------------------------------
 
 #: Workspace-root .env: projects/customer-support/src/config.py -> ../../../.env

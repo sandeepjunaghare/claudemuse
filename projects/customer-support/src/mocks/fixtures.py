@@ -6,7 +6,10 @@ staged setup for the Phase 2 PostToolUse normalization hook (TR5); do not
 normalize here.
 """
 
+import random
 from typing import Optional
+
+import config
 
 # --- Seed data -------------------------------------------------------------
 
@@ -28,11 +31,34 @@ ORDERS: dict[str, dict] = {
     "O1002": {"id": "O1002", "customer_id": "C002", "status": "delivered", "total": 900.00, "placed_at": "Mar 5, 2025"},
     # ISO 8601
     "O1003": {"id": "O1003", "customer_id": "C001", "status": "processing", "total": 120.00, "placed_at": "2025-03-15T14:30:00Z"},
+    # Cancelled order — sets up the Phase 3 `business` error: a refund against a
+    # cancelled order is a business-rule failure (the agent explains, never retries).
+    "O1004": {"id": "O1004", "customer_id": "C001", "status": "cancelled", "total": 60.00, "placed_at": "2025-02-10T09:00:00Z"},
 }
 
-#: Phase 3 will flip this on to exercise transient (503) retry handling (TR6).
-#: Inert in Phase 1 so the suite stays deterministic.
-FLAKY_503_ENABLED = False
+#: Phase 3: the order backend is flaky — it returns a transient 503 ~10% of the
+#: time (TR6), exercising category-driven retry. Live runs stay probabilistic;
+#: unit tests force the failures deterministically via the seam below.
+FLAKY_503_ENABLED = True
+
+#: Test seam: a countdown of forced transient failures. While > 0, the next
+#: `maybe_fail_transient()` call returns True and decrements it — letting unit
+#: tests script an exact transient-then-success sequence with zero randomness.
+#: Process-global like `verified_store`, so tests MUST reset it between cases
+#: (autouse `reset_flaky` fixture in conftest).
+_forced_failures = 0
+
+
+def force_transient_failures(n: int) -> None:
+    """Force the next `n` `maybe_fail_transient()` calls to report a 503 (test seam)."""
+    global _forced_failures
+    _forced_failures = n
+
+
+def reset_flaky() -> None:
+    """Clear any pending forced transient failures (call between tests)."""
+    global _forced_failures
+    _forced_failures = 0
 
 
 # --- Accessors -------------------------------------------------------------
@@ -68,7 +94,15 @@ def get_order(order_id: str) -> Optional[dict]:
     return ORDERS.get(order_id)
 
 
-def maybe_fail_transient() -> None:
-    """No-op stub for Phase 1. Phase 3 will raise/return a transient 503 here
-    when `FLAKY_503_ENABLED` is true, to exercise category-driven retry (TR6)."""
-    return None
+def maybe_fail_transient() -> bool:
+    """Whether the order backend should report a transient 503 on this call (TR6).
+
+    The forced-failure seam is authoritative and checked FIRST so unit tests are
+    fully deterministic; only when no forced failures remain does the probabilistic
+    `FLAKY_503_ENABLED` path apply (live runs). `random.random()` is fine in app code.
+    """
+    global _forced_failures
+    if _forced_failures > 0:
+        _forced_failures -= 1
+        return True
+    return FLAKY_503_ENABLED and random.random() < config.FLAKY_503_PROBABILITY

@@ -10,6 +10,7 @@ from their descriptions (TR2).
 from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
 import config
+from hooks.handoff_gate import handoff_gate
 from hooks.normalize import normalize_order_dates
 from hooks.prerequisite_gate import prerequisite_gate, record_verified_customer
 from hooks.refund_gate import refund_gate
@@ -42,6 +43,43 @@ refunds are not something you can do yourself — route them to a human.
 - Escalate to a human when the customer explicitly asks for one, when policy is \
 silent or ambiguous, or when you genuinely cannot make progress.
 
+Handling tool errors:
+- If a tool reports a *transient* error (e.g. an HTTP 503 / "temporarily \
+unavailable"), retry the same call — up to a few attempts — since the failure is \
+likely momentary.
+- If a tool reports a *business*, *validation*, or *permission* error, do NOT \
+retry it. Explain the situation to the customer in plain language, ask for any \
+correction needed (e.g. a different order number), or escalate to a human if the \
+error blocks resolution.
+
+When to escalate (calibration):
+- Explicit request: the customer asks for a human, manager, or supervisor — \
+escalate right away (reason_for_escalation = "explicit_request"). Do not try to \
+talk them out of it.
+- Frustration / venting: if a customer is upset but their request is still \
+actionable, acknowledge how they feel and try to resolve the underlying problem \
+first. Do NOT escalate on a first frustrated message just because of the tone. \
+Escalate only if they then explicitly ask for a human or you cannot resolve it.
+- Policy gap: if policy is silent or ambiguous about what they're asking for, \
+escalate (reason_for_escalation = "policy_gap") rather than guessing.
+- Stalled: if you genuinely cannot make progress (e.g. an unrecoverable error \
+blocks the only path forward), escalate (reason_for_escalation = "stalled").
+- Over-limit refund: if a refund you attempt is blocked for exceeding policy, \
+escalate it to a human (reason_for_escalation = "over_limit_refund").
+
+When you escalate, the human cannot see this conversation, so fill in the \
+escalation summary completely: reason_for_escalation, root_cause, \
+recommended_action, the actions_taken so far, and the customer (and order, if \
+relevant) context.
+
+Examples:
+- Customer: "Just give me a manager, now." -> escalate immediately with \
+reason_for_escalation = "explicit_request".
+- Customer: "This is the third time my order is late and I'm furious." -> \
+acknowledge the frustration and look up the order to help; do not escalate yet.
+- Customer asks something policy doesn't cover (e.g. a goodwill credit with no \
+defined rule) -> escalate with reason_for_escalation = "policy_gap".
+
 Be concise, accurate, and friendly. When you have resolved the request, give the \
 customer a clear, direct answer.
 """
@@ -58,12 +96,15 @@ def _build_hooks() -> dict:
     refund = f"mcp__{config.MCP_SERVER_NAME}__process_refund"
     order = f"mcp__{config.MCP_SERVER_NAME}__lookup_order"
     customer = f"mcp__{config.MCP_SERVER_NAME}__get_customer"
+    escalate = f"mcp__{config.MCP_SERVER_NAME}__escalate_to_human"
     return {
         "PreToolUse": [
             # TR4: gate order/refund actions behind a verified customer.
             HookMatcher(matcher=f"{order}|{refund}", hooks=[prerequisite_gate]),
             # TR3: deny over-limit refunds (block is the 100% guarantee).
             HookMatcher(matcher=refund, hooks=[refund_gate]),
+            # TR8: deny incomplete handoffs so the model retries with full context.
+            HookMatcher(matcher=escalate, hooks=[handoff_gate]),
         ],
         "PostToolUse": [
             # TR4 writer: record the verified customer id on a single match.

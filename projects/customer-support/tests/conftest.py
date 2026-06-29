@@ -18,6 +18,7 @@ if str(_SRC) not in sys.path:
 
 import config  # noqa: E402  (after sys.path setup)
 from hooks import verified_store  # noqa: E402  (SDK-free; safe without the API)
+from mocks import fixtures  # noqa: E402  (SDK-free; safe without the API)
 
 config.load_env()
 
@@ -32,6 +33,27 @@ def _reset_verified_store():
     verified_store.reset()
     yield
     verified_store.reset()
+
+
+@pytest.fixture(autouse=True)
+def _reset_flaky():
+    """Make the flaky 503 backend deterministic for the WHOLE suite (TR6).
+
+    Two process-global sources of transient failure exist on `fixtures`:
+    (1) the forced-failure countdown (the test seam) and (2) the ~10%
+    probabilistic path (`FLAKY_503_ENABLED`). The seam is reset between cases so a
+    leftover forced failure can't bleed into the next test. The probabilistic path
+    is pinned OFF during the suite (and restored after) so it never randomly fires
+    in tests that don't intend a transient: no test relies on the probabilistic
+    path — deterministic tool tests force their 503s, and live calibration tests
+    force theirs too. The production default (`True`) is untouched in source.
+    """
+    original = fixtures.FLAKY_503_ENABLED
+    fixtures.FLAKY_503_ENABLED = False
+    fixtures.reset_flaky()
+    yield
+    fixtures.reset_flaky()
+    fixtures.FLAKY_503_ENABLED = original
 
 
 def agent_runnable() -> bool:
