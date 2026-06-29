@@ -17,8 +17,21 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 import config  # noqa: E402  (after sys.path setup)
+from hooks import verified_store  # noqa: E402  (SDK-free; safe without the API)
 
 config.load_env()
+
+
+@pytest.fixture(autouse=True)
+def _reset_verified_store():
+    """Clear the process-global verified-customer store before each test (TR4).
+
+    The store is keyed by session_id but shared across the process, so without
+    this reset verified state would leak between cases (live and unit alike).
+    """
+    verified_store.reset()
+    yield
+    verified_store.reset()
 
 
 def agent_runnable() -> bool:

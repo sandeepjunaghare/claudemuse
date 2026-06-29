@@ -7,9 +7,12 @@ verify (before order/account/financial actions), letting the model choose tools
 from their descriptions (TR2).
 """
 
-from claude_agent_sdk import ClaudeAgentOptions
+from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
 import config
+from hooks.normalize import normalize_order_dates
+from hooks.prerequisite_gate import prerequisite_gate, record_verified_customer
+from hooks.refund_gate import refund_gate
 from tools.server import support_server
 
 #: Fully-qualified tool names for least-privilege scoping (D2.3).
@@ -44,6 +47,33 @@ customer a clear, direct answer.
 """
 
 
+def _build_hooks() -> dict:
+    """Wire the Phase 2 deterministic guardrails as SDK hooks (TR3/TR4/TR5).
+
+    These enforce the invariants in code — NOT in the system prompt (the
+    deterministic-vs-probabilistic thesis, CLAUDE.md). The matchers scope each
+    hook to its tool(s); the hooks ALSO re-check the tool name internally, so
+    matcher semantics are an optimization, not a correctness dependency.
+    """
+    refund = f"mcp__{config.MCP_SERVER_NAME}__process_refund"
+    order = f"mcp__{config.MCP_SERVER_NAME}__lookup_order"
+    customer = f"mcp__{config.MCP_SERVER_NAME}__get_customer"
+    return {
+        "PreToolUse": [
+            # TR4: gate order/refund actions behind a verified customer.
+            HookMatcher(matcher=f"{order}|{refund}", hooks=[prerequisite_gate]),
+            # TR3: deny over-limit refunds (block is the 100% guarantee).
+            HookMatcher(matcher=refund, hooks=[refund_gate]),
+        ],
+        "PostToolUse": [
+            # TR4 writer: record the verified customer id on a single match.
+            HookMatcher(matcher=customer, hooks=[record_verified_customer]),
+            # TR5: normalize the order date to ISO 8601 before the model reads it.
+            HookMatcher(matcher=order, hooks=[normalize_order_dates]),
+        ],
+    }
+
+
 def build_options() -> ClaudeAgentOptions:
     """Construct the agent's run options (least-privilege, behavior-focused).
 
@@ -62,4 +92,5 @@ def build_options() -> ClaudeAgentOptions:
         allowed_tools=ALLOWED_TOOLS,
         strict_mcp_config=True,
         max_turns=config.MAX_TURNS_BACKSTOP,
+        hooks=_build_hooks(),
     )
