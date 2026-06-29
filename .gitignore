@@ -1,3 +1,10 @@
+# Secrets / environment files — never commit these
+.env
+**/.env
+*.env
+!*.env.example
+!.env.example
+
 # Python venv
 .venv/
 
