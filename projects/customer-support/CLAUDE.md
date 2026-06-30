@@ -2,9 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Status: greenfield, spec-driven
+## Status: implemented (all four PIV phases complete)
 
-This directory currently contains **only a specification** — `01-customer-support-resolution-agent.md` — and no implementation. That spec is the source of truth: it defines a Customer Support Resolution Agent built on the **Claude Agent SDK**, with mocked backends reached through MCP tools. Read it in full before writing code; the technical requirements (TR1–TR9) and acceptance criteria are non-negotiable contracts, not suggestions.
+All four build phases are implemented under `src/` with a passing test suite — **TR1–TR9 and FR1–FR6 are done**. The spec — `docs/01-customer-support-resolution-agent.md` — remains the source of truth for *intent*: a Customer Support Resolution Agent built on the **Claude Agent SDK** with mocked backends reached through MCP tools. Read it (and the per-phase plans under `.agents/plans/`) before changing behavior; the technical requirements (TR1–TR9) and acceptance criteria are non-negotiable contracts, not suggestions. The 20-case scripted suite (`tests/scenarios.py`) is the regression gate — keep it green and assert on tool calls/outcomes, never prose.
 
 ## Environment
 
@@ -45,9 +45,9 @@ Conversely, keep the **system prompt focused on behavior and escalation judgment
 
 Build a **scripted scenario suite** (happy path, over-limit refund, duplicate customer, transient failure, venting customer, explicit escalation, policy gap, multi-issue) and **assert on tool calls and outcomes — not on the model's wording**. This suite doubles as the regression gate. Targets from the acceptance criteria: 100% of over-limit refunds redirected (test 20+ cases), `process_refund` provably impossible before verification, exact $ amounts/order IDs surviving a simulated `/compact`, and ≥80% first-contact resolution on a 20-case suite.
 
-## Build order (PIV phases)
+## Build order (PIV phases) — all complete ✅
 
-1. Loop + four tools → resolve a simple order-status query end-to-end.
-2. Guardrails → prerequisite gate, refund PreToolUse hook, PostToolUse date normalization.
-3. Errors + escalation → structured errors, escalation calibration, handoff summary.
-4. Context + multi-issue → case-facts block, output trimming, multi-issue decomposition into one unified reply.
+1. ✅ Loop + four tools → resolve a simple order-status query end-to-end.
+2. ✅ Guardrails → prerequisite gate, refund PreToolUse hook, PostToolUse date normalization.
+3. ✅ Errors + escalation → structured errors, escalation calibration, handoff summary.
+4. ✅ Context + multi-issue → case-facts block (`src/context/case_facts.py` + the recorder/inject hooks), output trimming (`lookup_order`), multi-issue decomposition into one unified reply. Multi-turn substrate is `src/session.py` (`run_conversation`); the one-shot `src/loop.py` (`run_turn`) is retained for single-turn tests.
