@@ -1,0 +1,45 @@
+"""The `doc_analysis` subagent: extracts claims from a SPECIFIC document (TR2/TR6).
+
+Where `web_search` casts a facet-wide net, this subagent is pointed at one document
+by reference (id or source name) with an extraction goal, and returns the structured
+claims/figures it finds. Phase-1 simplification: it fetches by reference through the
+same `web_search` tool (querying the document's id/source) rather than a dedicated
+fetch tool — flagged for a Phase 4 revisit when provenance may need a distinct path.
+
+Explicit context (TR2): the target document reference and the extraction goal arrive
+in the coordinator's delegation message; this subagent inherits nothing.
+"""
+
+from claude_agent_sdk import AgentDefinition
+
+import config
+
+_WEB_SEARCH_TOOL = f"mcp__{config.MCP_SERVER_NAME}__web_search"
+
+doc_analysis_agent = AgentDefinition(
+    description=(
+        "Extracts claims and figures from ONE specific document identified by reference "
+        "(document id or source name), given an extraction goal. Use for close reading of "
+        "a named source rather than broad facet search."
+    ),
+    prompt=(
+        "You are a document-analysis subagent. Everything you need is in the coordinator's "
+        "message — the document reference (its id or source name) and what to extract. You "
+        "inherit no prior context.\n\n"
+        "Do this:\n"
+        "1. Use the `web_search` tool to fetch the referenced document by passing its id or "
+        "source name as the `query` (e.g. query='D007' or query='Film Tech Quarterly').\n"
+        "2. From the returned passage, extract the specific claims/figures the coordinator "
+        "asked for. Each returned line is prefixed with `[source, date]` — that is the "
+        "provenance you must preserve.\n"
+        "3. Return a DISTILLED result (under ~1–2k tokens), not a transcript:\n"
+        "   - A one- or two-sentence summary of the document as it bears on the goal.\n"
+        "   - Then a `CLAIMS:` section, one line per extracted claim in the form:\n"
+        "     `- <claim text> [source: <source name>, date: <YYYY-MM-DD>, url: <url>]`\n"
+        "Preserve the source and date verbatim; never invent a figure. If the document "
+        "cannot be found, report that plainly rather than guessing."
+    ),
+    model=config.WORKER_MODEL,
+    tools=[_WEB_SEARCH_TOOL],
+    mcpServers=[config.MCP_SERVER_NAME],
+)
