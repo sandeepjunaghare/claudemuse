@@ -32,6 +32,7 @@ from claude_agent_sdk import create_sdk_mcp_server, tool as sdk_tool
 from mcp.server.fastmcp import FastMCP
 
 import config
+import errors
 from mocks import corpus
 
 #: Shared tool description (purpose, inputs, returns) — used by BOTH server flavors below.
@@ -48,7 +49,13 @@ _WEB_SEARCH_DESCRIPTION = (
     "including a passage and url. If nothing matches you get an explicit empty result "
     "(a valid 'no sources found', not an error) — do not invent sources to fill a gap. "
     "You can also pass an exact source name or document id as the `query` to fetch a "
-    "specific document by reference."
+    "specific document by reference.\n\n"
+    "A source may be temporarily UNAVAILABLE (its endpoint timed out). When that happens "
+    "the result includes a machine-readable `ERROR:` block naming the unavailable source, "
+    "marked `retryable: true`. This is an ACCESS FAILURE — DISTINCT from a valid empty "
+    "result — and it may be retried. Any passages shown ABOVE the `ERROR:` block are still "
+    "valid, usable results: use them, and pass the unavailable-source note along so it can "
+    "be annotated as a gap."
 )
 
 
@@ -61,8 +68,17 @@ def _format_hit(doc: dict) -> str:
 def format_search(query: str, facet: str | None = None) -> str:
     """Search the corpus and render results as provenance-bearing text (pure, testable).
 
-    Returns one line per hit, each prefixed with `[source, date]`, or an explicit
-    empty-result message (a valid "no sources found", not an error) when nothing matches.
+    Four outcomes (TR7), all encoded in TEXT (the surface the model sees):
+      - CLEAN: one `[source, date]` line per hit.
+      - VALID EMPTY: an explicit "no sources found" message — NOT an error, NOT retryable.
+      - PARTIAL (some hits available, one timed out): the available lines PLUS a retryable
+        `ERROR:` block naming the unavailable source — the good evidence is not discarded.
+      - FULL ACCESS FAILURE (the ONLY match is a timed-out source, e.g. a by-reference fetch
+        of D004): just the retryable `ERROR:` block, no fabricated content.
+
+    Timeout is read from `doc.get("timeout")` here (the tool), so `mocks/corpus.py` stays
+    data-only. Nothing actually blocks — the timeout is *simulated* via the marker. Pure &
+    never raises.
     """
     hits = corpus.search(query, facet=facet)
     if not hits:
@@ -71,8 +87,58 @@ def format_search(query: str, facet: str | None = None) -> str:
             f"No sources found for query {query!r}{scope}. This is a valid empty result — "
             "report the gap; do not fabricate a source."
         )
-    lines = [_format_hit(doc) for doc in hits]
-    return f"Found {len(hits)} source(s) for {query!r}:\n" + "\n".join(lines)
+
+    # By-reference resolution: if the query EXACTLY names a hit's source or id, this is a
+    # fetch of that specific document — narrow to it, not to fuzzy term-neighbors. This makes
+    # a by-name fetch of an unavailable source (D004) a true full access failure, and keeps
+    # `mocks/corpus.py` data-only (the resolution lives here in the tool, not in the corpus).
+    q = query.strip().lower()
+    exact = [doc for doc in hits if q in (doc["id"].lower(), doc["source"].lower())]
+    if exact:
+        hits = exact
+
+    available = [doc for doc in hits if not doc.get("timeout")]
+    unavailable = [doc for doc in hits if doc.get("timeout")]
+
+    if not unavailable:
+        # CLEAN: every hit is reachable.
+        lines = [_format_hit(doc) for doc in available]
+        return f"Found {len(available)} source(s) for {query!r}:\n" + "\n".join(lines)
+
+    failed_source = unavailable[0]["source"]
+    if available:
+        # PARTIAL: keep the reachable evidence, then append the retryable ERROR block.
+        lines = [_format_hit(doc) for doc in available]
+        envelope = errors.ErrorEnvelope(
+            type=errors.FAILURE_ACCESS_TIMEOUT,
+            attempted_query=query,
+            is_retryable=True,
+            failed_source=failed_source,
+            alternative=(
+                "use the sources above; report the unavailable source as a gap "
+                "(one unavailable source does not make the facet a gap)."
+            ),
+        )
+        return (
+            f"Found {len(available)} source(s) for {query!r} "
+            f"(1 source unavailable):\n"
+            + "\n".join(lines)
+            + "\n\n"
+            + envelope.render()
+        )
+
+    # FULL ACCESS FAILURE: the only match timed out — no content, just the retryable error.
+    envelope = errors.ErrorEnvelope(
+        type=errors.FAILURE_ACCESS_TIMEOUT,
+        attempted_query=query,
+        is_retryable=True,
+        failed_source=failed_source,
+        alternative=(
+            "this specific source is unavailable — retry, or annotate it as an "
+            "unavailable source; do not fabricate its content."
+        ),
+    )
+    return envelope.render()
 
 
 mcp = FastMCP(config.MCP_SERVER_NAME)

@@ -301,3 +301,99 @@ stays inert; a residual gap after the cap is left as data.
 **For Phase 4:** wire the seeded corpus's conflict pair (D007/D008, 40% vs 55%), dated sources,
 and timeout marker (D004) into real behavior — structured error propagation (retry vs. valid
 empty), claim→source provenance, conflict/temporal annotation, and TR9 coverage rendering.
+
+---
+
+# Phase 4 — Reliability + Provenance (TR7/TR8/TR9)
+
+> Goal: turn the corpus's inert failure-mode data into behavior — a structured error envelope
+> that distinguishes an ACCESS FAILURE (retryable timeout) from a VALID EMPTY, claim→source
+> provenance assembled into `schemas.Report` (FR5: 100% cited), conflict/temporal handling for
+> the D007/D008 pair, and TR9 rendering (figures→table, analysis→prose, a Coverage & Gaps
+> section). Deep plan: `.agents/plans/phase-4-reliability-provenance.md`.
+>
+> Confirmed decisions: timeout = **single-source gap** (music stays `covered` via D003, RAC
+> annotated); retry = **subagent-prompt-driven** (deterministic envelope, model-driven retry);
+> provenance = machine-readable **`CLAIMS:` block** parsed by a pure `provenance.py`; synthesis +
+> TR9 rendering stay **coordinator-owned** (no new subagents).
+
+## Scope guardrails (what Phase 4 does NOT do)
+- ❌ Full per-facet `Report.sections` splitting — a single `{"body": text}` stub suffices.
+- ❌ Real (non-simulated) network I/O — the timeout is a corpus marker, nothing blocks.
+- ❌ Non-timeout access-failure taxonomy beyond the two constants; stretch goals (fork_session,
+  crash-recovery manifests, LLM-judge).
+- `mocks/corpus.py` stays **data-only** (timeout read in the tool); `_SEQUENTIAL_SYSTEM_PROMPT`
+  stays verbatim (benchmark baseline).
+
+## Steps
+- [x] Task 1 — `src/errors.py`: failure-type constants, `is_retryable()`, `ErrorEnvelope` + `render()`.
+- [x] Task 2 — `tests/test_errors.py`: retryable truth table + envelope render.
+- [x] Task 3 — `src/config.py`: `MAX_TOOL_RETRIES = 2` (prompt-referenced seam).
+- [x] Task 4 — `src/provenance.py`: `parse_claims_block()` + `build_report()` (pure, SDK-free).
+- [x] Task 5 — `tests/test_provenance.py`: claim/source parse, comma/colon-tolerant, url→None, FR5.
+- [x] Task 6 — `tools/server.py`: `format_search` timeout partitioning → clean / valid-empty /
+  partial / full-access-failure; extended `_WEB_SEARCH_DESCRIPTION`. **Plus** a by-reference
+  exactness fix (see review) so a by-name fetch of a timed-out source is a true access failure.
+- [x] Task 7 — `tests/test_tools_web_search.py`: partial + full-access-failure + access≠empty + clean.
+- [x] Task 8 — `SYSTEM_PROMPT`: CLAIMS block + conflict/temporal + source-unavailable + TR9 render.
+- [x] Task 9 — `_build_refinement_prompt`: re-emit COVERAGE **and** CLAIMS.
+- [x] Task 10 — `web_search.py` + `doc_analysis.py`: retry-then-structured-failure + partial-use.
+- [x] Task 11 — `loop.py`: `AgentRun.report: Optional[schemas.Report]` (set by `run_research`).
+- [x] Task 12 — `run_research`: assemble + attach `run.report` on both routes (`import provenance`).
+- [x] Task 13 — `test_coordinator_config.py`: Phase-4 prompt-contract assertions + baseline-clean.
+- [x] Task 14 — `tests/test_phase4_reliability_live.py`: one broad run → four TR7/TR8/TR9 assertions.
+- [x] Task 15 — `run_example.py`: print CLAIMS count / all-cited / unavailable-source annotation.
+- [x] Task 16 — this checklist + review.
+
+## Validation (Phase 4 done when)
+- [x] Level 1 imports clean; `AgentRun().report is None`; `coordinator.provenance` present.
+- [x] Unit suite green + fast: **107 passed, ~1.2s** (`-m "not integration"`; 82 prior + 25 new).
+- [x] `format_search` four outcomes verified: music partial (D003 + RAC ERROR), by-ref D004 full
+  access failure (no content), film clean, empty valid — access failure distinct from valid empty.
+- [x] Live Phase-4 acceptance (`test_phase4_reliability_live.py`) PASS: no abort, music covered +
+  RAC annotated, `report.all_claims_have_source()`, conflict pair (40%/55%, both sources+dates)
+  preserved, table + Coverage & Gaps rendered.
+- [x] Full live regression (Phase 1–4): first run **7/8 passed**; `test_broad_query_covers_all_facets`
+  regressed (music → `partial` under the now-active timeout). Fixed by tightening the COVERAGE
+  prompt rule; **re-run PASS** (98s, music `covered` on first pass, no refinement needed).
+
+## Review (Phase 4 — COMPLETE, 2026-07-03)
+
+**Outcome:** All four Phase-4 capabilities are live. `web_search` returns a structured `ERROR:`
+envelope that distinguishes a retryable access timeout from a valid empty; subagents are prompted
+to retry then propagate a structured failure; the coordinator preserves the D007/D008 conflict
+(both sources, dates, 40%/55%) and renders a figures table + a `## Coverage & Gaps` section; and
+`run.report` is a real `schemas.Report` whose every parsed claim carries a source (FR5). 107 unit
+tests + the Phase-4 live acceptance green.
+
+**What worked**
+- The plan's "no new SDK mechanic" call held — pure Python (`errors.py`, `provenance.py`,
+  `format_search` partitioning) + prompt contracts. The tolerant `CLAIMS:` parser (last-bracket
+  split, not a brittle regex) handled commas/colons in claim text first try.
+- Folding the prompt-contract spike into the live test (Phase-3 precedent) surfaced the CLAIMS
+  block, conflict-preservation, and table-rendering contracts holding on the first live run.
+- Structure-only assertions caught the one real regression (coverage status), not prose.
+
+**What didn't (and how it was fixed)**
+1. **By-reference fuzzy match leaked an unrelated doc.** `corpus.search("Recording Artists
+   Coalition")` also matched D002 (*Copyright Law Review*) via the substring `"artists"`, so the
+   by-name fetch of the timed-out source was a *partial*, not the intended *full access failure*.
+   Fix: resolve by-reference exactness **in the tool** — when the query exactly names a hit's
+   source/id, narrow to that doc. Keeps `mocks/corpus.py` data-only (deviation from the plan's
+   assumption that the name matched only D004; documented here). Correctness win: a by-name fetch
+   now returns the referenced doc, not fuzzy neighbors.
+2. **Timeout ripple downgraded music (the flagged risk).** Full live regression: 7/8 passed; the
+   Phase-3 broad-coverage test saw music marked `partial` because one source (RAC) timed out —
+   despite solid D003 evidence. The Phase-4 run marked it `covered` (model non-determinism). Fix
+   (plan-sanctioned, prompt preferred): tightened the COVERAGE-marking rule so an UNAVAILABLE
+   source never downgrades a facet that has solid evidence from an available source — `partial`
+   is reserved for genuinely thin *available* evidence. Re-run PASS (music `covered` first pass,
+   no refinement burned) — the "one timed-out source ≠ facet downgrade" contract now holds live.
+
+**Deliberate boundaries (unchanged):** single-source gap ≠ facet gap; prompt-driven retry with a
+deterministic envelope (the loop can't see subagent-internal tool calls — TR6, so no live
+retry-count assertion); prompt-driven conflict handling asserted on structure; coordinator-owned
+synthesis + TR9 rendering (no `synthesis`/`report` subagents).
+
+**Memory:** no new SDK mechanic surfaced — `mar-agent-sdk-delegation` needs no update. The
+by-reference-exactness and timeout-ripple findings are Phase-4-specific and captured here.

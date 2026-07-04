@@ -32,6 +32,7 @@ from claude_agent_sdk import ClaudeAgentOptions
 
 import config
 import coverage_eval
+import provenance
 import triage
 from agents.doc_analysis import doc_analysis_agent
 from agents.web_search import web_search_agent
@@ -109,15 +110,43 @@ written inline as `[source, date]`. Do not drop a source or invent a fact — if
 has no source, it does not belong in the report.
   - Be accurate and concise. Prefer the subagents' distilled findings over your own \
 prior knowledge.
-- End your briefing with a machine-readable coverage report, on its own lines, in EXACTLY \
-this format (a header line, then one line per facet you addressed):
+  - CONFLICTING SOURCES: if two credible sources report DIFFERENT values for the SAME \
+figure, present BOTH with their source and date — never silently pick one, average them, \
+or drop either. Note the temporal difference explicitly (e.g. an earlier figure vs. a \
+later one) so a change over time is not misread as a contradiction.
+  - UNAVAILABLE SOURCES: if a subagent's evidence includes an `ERROR:` block reporting an \
+unavailable (timed-out) source, do NOT fabricate that source's content and do NOT abort. \
+Use whatever partial results you did get. A facet still counts as `covered` when you have \
+solid evidence for it from OTHER sources even though one source was unavailable — record \
+the unavailable source in the `## Coverage & Gaps` section, NOT as a facet gap.
+- RENDER BY CONTENT TYPE:
+  - Render QUANTITATIVE figures/statistics as a Markdown TABLE with the columns \
+`Metric | Value | Source | Date` (put the conflicting film-adoption figures in this table, \
+one row per source so both values appear side by side).
+  - Render QUALITATIVE analysis as prose.
+  - After the briefing body, add a `## Coverage & Gaps` section that marks which facets are \
+well-supported and calls out any areas limited by unavailable sources.
+- End your briefing with TWO machine-readable blocks, in this order, each on its own lines.
+  First, the coverage report in EXACTLY this format (a header line, then one line per facet \
+you addressed):
   COVERAGE:
   - <facet name>: <covered|partial|gap>
-  Mark a facet `covered` only if you found real sourced evidence for it, `partial` if the \
-evidence was thin, and `gap` if you could not cover it at all. List every facet you set out \
-to research.
+  Mark a facet `covered` if you found real sourced evidence for it from at least one \
+AVAILABLE source, `partial` ONLY when the available evidence itself is genuinely thin, and \
+`gap` if you could not cover it at all. A source being UNAVAILABLE (timed out) does NOT make \
+a facet `partial` or a gap: if another available source gave you solid evidence for that \
+facet, mark it `covered` and record the unavailable source in `## Coverage & Gaps` instead — \
+never let one timed-out source downgrade a facet you otherwise covered. List every facet you \
+set out to research.
+  Then, after a blank line, the claims list in EXACTLY this format — one line per claim, \
+every claim carrying its source and date (100% cited; a claim with no source does not \
+belong here):
+  CLAIMS:
+  - <claim text> [source: <source name>, date: <YYYY-MM-DD>, url: <url>]
+  Include the conflicting figures as SEPARATE claim lines (one per source), so both survive.
 
-Produce the final briefing (with its trailing COVERAGE report) as your last message.
+Produce the final briefing (with its `## Coverage & Gaps` section, then the trailing \
+COVERAGE and CLAIMS blocks) as your last message.
 """
 
 #: Phase-1 SEQUENTIAL prompt, preserved VERBATIM. Retained ONLY as the benchmark baseline
@@ -348,8 +377,11 @@ PRIOR DRAFT (keep its well-covered sections verbatim; do not lose any existing c
 Now COMPLETE the briefing so it covers ALL facets. Delegate to `web_search` for ONLY the \
 missing facets ({missing_str}) — do not re-research the facets already covered above — then \
 produce the FULL updated briefing: keep the existing sections, add a section for each missing \
-facet, and end with the COVERAGE report covering every facet. Every claim keeps its \
-`[source, date]` exactly as the subagent reported it.
+facet, and re-emit BOTH trailing machine-readable blocks — the COVERAGE report covering \
+every facet, then (after a blank line) the CLAIMS block listing every claim (existing and \
+newly added) in the form `- <claim text> [source: <source name>, date: <YYYY-MM-DD>, \
+url: <url>]`. Every claim keeps its `[source, date]` exactly as the subagent reported it; \
+do not lose any existing claim or source.
 """
 
 
@@ -388,18 +420,27 @@ async def _run_with_refinement(
 
 
 async def run_research(question: str) -> AgentRun:
-    """Route via deterministic triage (TR3), then verify coverage and self-heal gaps (TR4/TR5).
+    """Route via deterministic triage (TR3), verify coverage/self-heal gaps (TR4/TR5), attach provenance (TR8/FR5).
 
     A narrow lookup takes the cheap single-agent fallback (no fan-out, no coverage check). A
     broad question takes the full parallel coordinator wrapped in the bounded refinement loop,
-    which verifies the report spans all `corpus.FACETS` and re-delegates any gap. `run.route`
-    is stamped LAST; the loop itself stays route- and coverage-agnostic.
+    which verifies the report spans all `corpus.FACETS` and re-delegates any gap. After the
+    turn(s), `run.report` is assembled from the final synthesized text (its `CLAIMS:` block →
+    `Claim`+`SourceRef`), so FR5 ("100% of claims cited") is checkable on structure. `run.route`
+    and `run.report` are stamped LAST; the loop itself stays route-, coverage-, and report-agnostic.
     """
     route = triage.classify(question)
     if route == triage.ROUTE_SINGLE_AGENT:
         run = await run_turn(question, build_single_agent_options())
         run.route = route
-        return run  # narrow lookup: no facet coverage / refinement applied
+        # A narrow lookup has no coverage/refinement; a best-effort report is attached (its
+        # CLAIMS block is usually absent → empty claims, which is vacuously 100%-cited).
+        run.report = provenance.build_report(run.final_text, {}, [])
+        return run
     run = await _run_with_refinement(question, build_coordinator_options(), corpus.FACETS)
     run.route = route
+    # Assemble the provenance report from the LAST synthesis turn's text (already the refined
+    # full briefing), preserving the loop's coverage/gaps. Separation of concerns: the
+    # refinement loop stays coverage-focused; provenance assembly lives here.
+    run.report = provenance.build_report(run.final_text, run.coverage, run.gaps)
     return run

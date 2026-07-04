@@ -40,6 +40,13 @@ MAX_TURNS_BACKSTOP = 20
 #: for coverage gaps at most this many times. Used by `coordinator._run_with_refinement`.
 MAX_REFINEMENT_ITERATIONS = 2
 
+#: Ceiling on a subagent's LOCAL retries of a retryable access failure before it propagates a
+#: structured failure to the coordinator (TR7). Referenced in the subagent prompts (the retry is
+#: model-driven — "local recovery" happens inside the subagent's own context, which the SDK runs
+#: opaquely, so no orchestration code reads this). Named here as the single source of truth;
+#: precedent: MAX_REFINEMENT_ITERATIONS above and the deferred CLASSIFIER_MODEL seam.
+MAX_TOOL_RETRIES = 2
+
 #: Word-count threshold separating a narrow lookup from a broad question in the Phase-2
 #: deterministic triage (TR3). At or below this AND matching a single-fact interrogative
 #: → single-agent fallback; above it → parallel fan-out. Read by `triage.classify`.

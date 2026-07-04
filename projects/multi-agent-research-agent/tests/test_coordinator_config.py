@@ -9,6 +9,8 @@ makes no API call, so these run in the default (non-integration) suite.
 import config
 from coordinator import (
     SYSTEM_PROMPT,
+    _SEQUENTIAL_SYSTEM_PROMPT,
+    _build_refinement_prompt,
     build_coordinator_options,
     build_no_delegation_options,
     build_partial_coordinator_options,
@@ -92,3 +94,27 @@ def test_system_prompt_carries_coverage_and_partitioning_contract():
     # TR4: the coordinator is asked to partition facets and emit a machine-readable block.
     assert "COVERAGE:" in SYSTEM_PROMPT
     assert "one facet" in SYSTEM_PROMPT.lower()
+
+
+def test_system_prompt_carries_phase4_contracts():
+    # TR8/FR5: a machine-readable CLAIMS block (every claim cited).
+    assert "CLAIMS:" in SYSTEM_PROMPT
+    # TR8: conflicting-source / same-figure handling.
+    assert "SAME figure" in SYSTEM_PROMPT
+    # TR7/TR9: unavailable-source handling + the annotation section.
+    assert "unavailable" in SYSTEM_PROMPT.lower()
+    assert "Coverage & Gaps" in SYSTEM_PROMPT
+    # TR9: render figures as a table.
+    assert "table" in SYSTEM_PROMPT.lower()
+
+
+def test_sequential_baseline_stays_claims_free():
+    # The benchmark baseline is preserved verbatim — no Phase-4 CLAIMS contract leaks into it.
+    assert "CLAIMS:" not in _SEQUENTIAL_SYSTEM_PROMPT
+
+
+def test_refinement_prompt_re_emits_claims_block():
+    # A refined report must re-emit CLAIMS or `run.report.claims` would be empty after refinement.
+    prompt = _build_refinement_prompt("the question", "the prior draft", ["film"])
+    assert "CLAIMS" in prompt
+    assert "film" in prompt  # the missing facet is named

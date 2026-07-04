@@ -30,6 +30,13 @@ async def main():
     print("GAPS:       ", run.gaps)  # [] when the topic is fully covered
     print("REFINEMENT ITERATIONS (TR5):", run.refinement_iterations, "(0 = covered on first pass)")
     print("COVERAGE HISTORY:", run.coverage_history)  # coverage map after each turn (progression)
+    if run.report is not None:
+        # FR5: every parsed claim carries a source (TR8). Should be > 0 and all cited on a broad run.
+        print("CLAIMS (FR5):", len(run.report.claims),
+              "| all cited:", run.report.all_claims_have_source())
+    # TR7: the timed-out source (D004) should be annotated as unavailable, not silently dropped.
+    annotated = any(s in run.final_text for s in ("Recording Artists Coalition", "unavailable", "timed out"))
+    print("UNAVAILABLE SOURCE ANNOTATED (TR7):", annotated)
     print("REPORT:\n")
     print(run.final_text)
 
