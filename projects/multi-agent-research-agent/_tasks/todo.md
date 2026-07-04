@@ -121,3 +121,86 @@ claim. 22 unit tests + 3 integration tests green. `run_example.py` produces a cl
 **For Phase 2:** solve awaiting parallel subagents (the crux) — the external server should
 handle concurrent calls, but the coordinator's turn-ending-early behavior under parallel
 launch is the real problem to design around.
+
+---
+
+# Phase 2 — Parallel Fan-Out + Dynamic Selection (TR2/TR3/TR10)
+
+> Goal: the coordinator spawns subagents that run CONCURRENTLY for broad questions
+> (measurably faster than sequential), and a deterministic triage routes narrow lookups to
+> a cheap single-agent fallback that skips the ~15× fan-out. Validate on STRUCTURE.
+
+## Scope guardrails (what Phase 2 does NOT do)
+- ❌ Scope partitioning + coverage verification + refinement loop (Phase 3, TR4/TR5).
+- ❌ Structured error envelopes, conflict/temporal annotation, coverage rendering (Phase 4).
+- Corpus timeout marker (D004) stays inert; `Report.coverage`/`gaps` stay stubbed.
+
+## Steps
+- [x] Task 1 — `loop.py`: `delegation_batches`, `task_events`, `peak_concurrent_tasks`,
+  `max_parallel_delegations`, `subagent_total_tokens`, `total_cost_usd`/`usage`, `route`.
+- [x] Task 2 — linchpin spike (ran 3 live variants: background False/None/True + concurrency timing).
+- [x] Task 3 — `background=True` on both subagents.
+- [x] Task 4 — `src/triage.py` deterministic `classify()`.
+- [x] Task 5 — `config.CLASSIFIER_MODEL` (Haiku seam) + `SIMPLE_QUERY_MAX_WORDS`.
+- [x] Tasks 6–8 — parallel `SYSTEM_PROMPT`; `_SEQUENTIAL_SYSTEM_PROMPT` +
+  `build_sequential_coordinator_options()`; `build_single_agent_options()`; triage-routed
+  `run_research()`.
+- [x] Tasks 9–10 — `run_example.py` prints route/parallelism/cost; `benchmark_parallel.py`.
+- [x] Tasks 11–14 — `test_triage.py`, `test_loop_task_parsing.py`,
+  `test_phase2_parallel_live.py`; extended `test_coordinator_config.py`.
+- [x] Task 15 — validation, memory, review (this section).
+
+## Validation (Phase 2 done when) — ✅ ALL PASS
+- [x] Unit suite green + fast: **57 passed, ~1.1s** (`-m "not integration"`).
+- [x] Broad query fans out with REAL concurrency: `peak_concurrent_tasks >= 2` (live test).
+- [x] Narrow lookup → single-agent fallback: `route == single_agent`, `delegations == []`,
+  no `Agent`, `web_search` used directly (live test).
+- [x] Benchmark speedup **1.82×** (sequential 141.9s / peak 1 → parallel 77.9s / peak 4).
+- [x] Phase-1 live regression still green under the promoted parallel coordinator.
+
+## Review (Phase 2 — COMPLETE, 2026-07-03)
+
+**Outcome:** Broad questions fan out to concurrent subagents (measured **1.82× faster**,
+peak 4 tasks overlapping); narrow lookups route to a cheap grounded single-agent path.
+Deterministic triage + loop instrumentation are 100% unit-tested; parallelism and the
+fallback are proven live on structure.
+
+**The linchpin spike overturned the plan's core assumption** — this was the whole game:
+- The plan chose `max_parallel_delegations >= 2` (≥2 `Agent` blocks in one message) as the
+  parallelism proof. **The Opus coordinator NEVER does this** — it emits one `Agent` call
+  per message under EVERY `background` setting (False/None/True), even with emphatic
+  "single message" steering. So that signal is unreachable; it stays as instrumentation only.
+- **Real parallelism = `background=True` + fire delegations back-to-back.** The concurrency
+  spike measured **peak 5 tasks active at once**. The deterministic proof is
+  `AgentRun.peak_concurrent_tasks` (replay `task_events`: started +1, terminal −1). User
+  approved this signal swap. This proves TR2 *better* — real overlap, not just intent.
+- The feared "launched agents, will report back" early-finish **never occurred** — the
+  coordinator synthesized cleanly inline (num_turns=1, success, citations) in every spike.
+
+**Second finding — the single-agent fallback couldn't reach its tool.** The plan assumed
+"MCP tools come via `mcp_servers` regardless of `tools=[]`." False for a top-level
+non-delegating agent: it reported "I don't have a web_search tool" and answered from memory
+(test failed on `web_search in tool_calls`). **Fix:** the single agent uses an IN-PROCESS
+`create_sdk_mcp_server` (the sibling's proven `tools=[]` pattern) — the subagent "Stream
+closed" race that forced external stdio doesn't apply with no subagents. Also hardened the
+prompt to MANDATE corpus grounding (search first, never answer from memory) and switched the
+test lookup to a corpus-only fact ("How many AI music tracks…2024?", D003) so recall can't
+substitute for retrieval. Both are correctness improvements, not test-gaming.
+
+**What worked**
+- Instrumenting the loop for BOTH paths BEFORE the spike meant the code worked regardless of
+  outcome — only the `background` value + prompt cadence + the proof-metric choice changed.
+- `peak_concurrent_tasks` from the `task_events` timeline is a clean, non-flaky CI signal;
+  the benchmark (kept out of pytest) supplies the wall-clock number on demand.
+- Structure-only assertions held up: the fallback failure was caught by `web_search in
+  tool_calls`, and the parallelism by `peak_concurrent_tasks`, never by prose.
+
+**Deliberate Phase-2 simplifications (revisit later)**
+- Two server flavors now coexist: external stdio (coordinator + subagents) and in-process
+  (single-agent fallback). Justified by the surfacing/reliability asymmetry; both share
+  `format_search`. Revisit if a later phase unifies them.
+- Sequential baseline retained ONLY for the benchmark; `run_research` never takes it.
+
+**For Phase 3:** scope partitioning (assign distinct facets/source-types per subagent to
+cut duplicate retrieval) + the refinement loop (evaluate coverage, re-delegate gaps,
+re-synthesize up to `MAX_REFINEMENT_ITERATIONS`). `Report.coverage`/`gaps` come alive here.

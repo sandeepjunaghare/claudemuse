@@ -7,7 +7,12 @@ makes no API call, so these run in the default (non-integration) suite.
 """
 
 import config
-from coordinator import build_coordinator_options, build_no_delegation_options
+from coordinator import (
+    build_coordinator_options,
+    build_no_delegation_options,
+    build_sequential_coordinator_options,
+    build_single_agent_options,
+)
 
 _WEB_SEARCH_TOOL = f"mcp__{config.MCP_SERVER_NAME}__web_search"
 
@@ -40,3 +45,32 @@ def test_no_delegation_config_cannot_delegate():
     assert n.tools == []
     assert "Agent" not in (n.allowed_tools or [])
     assert not n.agents
+
+
+def test_subagents_run_in_background_for_parallel_overlap():
+    # Phase-2 spike decision (Path B): background=True is what makes back-to-back
+    # delegations overlap in wall-clock (peak_concurrent_tasks >= 2 / TR2).
+    o = build_coordinator_options()
+    for name, agent in o.agents.items():
+        assert agent.background is True, name
+
+
+def test_single_agent_fallback_cannot_delegate_but_keeps_web_search():
+    # The cheap narrow-lookup path (TR3/TR10): no Agent tool, no subagents, Sonnet tier,
+    # but web_search still reachable so it answers the fact directly.
+    s = build_single_agent_options()
+    assert s.tools == []
+    assert "Agent" not in (s.allowed_tools or [])
+    assert not s.agents
+    assert s.model == config.WORKER_MODEL
+    assert _WEB_SEARCH_TOOL in s.allowed_tools
+
+
+def test_sequential_baseline_matches_parallel_except_the_prompt():
+    # The benchmark baseline: same delegation-capable config, only the system prompt differs.
+    seq = build_sequential_coordinator_options()
+    par = build_coordinator_options()
+    assert seq.tools == ["Agent"]
+    assert set(seq.agents.keys()) == {"web_search", "doc_analysis"}
+    assert _WEB_SEARCH_TOOL in seq.allowed_tools
+    assert seq.system_prompt != par.system_prompt  # distinct steering

@@ -31,9 +31,11 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeAgentOptions
 
 import config
+import triage
 from agents.doc_analysis import doc_analysis_agent
 from agents.web_search import web_search_agent
 from loop import AgentRun, run_turn
+from tools.server import research_server
 
 _WEB_SEARCH_TOOL = f"mcp__{config.MCP_SERVER_NAME}__web_search"
 
@@ -55,7 +57,61 @@ def _research_mcp_config() -> dict:
         }
     }
 
+#: Phase-2 DEFAULT: steers PARALLEL fan-out. The Phase-2 spike showed the coordinator
+#: fires ONE `Agent` call per message regardless of prompt, but with `background=True`
+#: subagents (see agents/*.py), firing them BACK-TO-BACK without pausing to reason between
+#: them makes their background tasks OVERLAP in wall-clock (TR2/FR3) — that is the real
+#: parallelism, measured by `AgentRun.peak_concurrent_tasks`. Every Phase-1 non-negotiable
+#: is kept (cover the whole topic; use BOTH subagents; pass all context explicitly; every
+#: claim carries `[source, date]`; never end the turn on a "launched agents" announcement);
+#: only the delegation cadence changed from sequential-and-wait to fire-all-then-collect.
 SYSTEM_PROMPT = """\
+You are the lead coordinator of a multi-agent research system. Given a broad research \
+question, you decompose it, delegate the legwork to specialist subagents, and \
+synthesize their findings into a single cited briefing. You are the only agent that \
+sees the whole picture — the subagents work in isolation and report back only to you.
+
+How to work:
+- Decompose the question into a few distinct subtopics or facets that together cover \
+the whole topic — do not cover only one facet. Decide ALL the facets up front.
+- Delegate the actual research using the Agent tool. You have two subagents, and you \
+should use BOTH at least once:
+  - `web_search`: give it ONE facet plus query hints; it searches the corpus and \
+returns a distilled summary with claim->source->date lines for that facet. Use it to \
+gather each facet.
+  - `doc_analysis`: give it a specific document reference (id or source name) plus an \
+extraction goal; it returns the claims/figures from that one document. Use it to \
+CLOSELY READ at least one specific source — for example, to pin down an exact figure, \
+or to compare two sources that may report different values for the same figure.
+- The subagents inherit NOTHING from you. Pass everything they need explicitly in each \
+delegation prompt: the subtopic, the facet, the source-type scope, and the output \
+contract you expect. Never assume they can see the original question or each other's work.
+- IMPORTANT — fan out in PARALLEL: once you have decided the facets, dispatch your \
+`Agent` delegations BACK-TO-BACK — one right after another — WITHOUT pausing to reason or \
+wait for a subagent's results between them. Your subagents run in the background, so \
+firing them in immediate succession lets them work CONCURRENTLY. Do NOT delegate, wait for \
+the result, reflect, then delegate again — that serializes them and defeats the purpose.
+- You MUST NOT end your turn until you have written the complete synthesized briefing. A \
+message that merely says you have "launched" or "dispatched" agents and will report back \
+"once they return" is NOT an acceptable final answer. After you have dispatched every \
+delegation, WAIT for all their distilled results to come back, then keep working and write \
+the briefing in this same turn.
+- Use what the subagents report — do not do the research yourself.
+- Then synthesize ONE briefing yourself:
+  - Organize it into a section per facet.
+  - Every claim must carry its source and date exactly as the subagent reported them, \
+written inline as `[source, date]`. Do not drop a source or invent a fact — if a claim \
+has no source, it does not belong in the report.
+  - Be accurate and concise. Prefer the subagents' distilled findings over your own \
+prior knowledge.
+
+Produce the final briefing as your last message.
+"""
+
+#: Phase-1 SEQUENTIAL prompt, preserved VERBATIM. Retained ONLY as the benchmark baseline
+#: (`build_sequential_coordinator_options` → `benchmark_parallel.py`) so the parallel
+#: speedup can be measured against it. NOT the default path.
+_SEQUENTIAL_SYSTEM_PROMPT = """\
 You are the lead coordinator of a multi-agent research system. Given a broad research \
 question, you decompose it, delegate the legwork to specialist subagents, and \
 synthesize their findings into a single cited briefing. You are the only agent that \
@@ -95,6 +151,22 @@ prior knowledge.
 Produce the final briefing as your last message.
 """
 
+#: Single-agent fallback prompt (TR3/TR10): a narrow lookup answered DIRECTLY by one
+#: Sonnet agent — no delegation, no ~15× fan-out cost.
+_SINGLE_AGENT_SYSTEM_PROMPT = """\
+You are a research assistant answering ONE narrow, specific question. Answer it DIRECTLY \
+and concisely.
+
+- You MUST ground every answer in the research corpus. ALWAYS call the `web_search` tool \
+FIRST to find the fact — even if you believe you already know the answer, do NOT answer \
+from your own prior knowledge. This system only reports what the corpus supports. Pass \
+keywords, or the exact source name/document id, as the `query`.
+- Then answer in a sentence or two, with the source and date inline as `[source, date]` \
+exactly as the tool reported them. Do not invent a source; if the search returns nothing, \
+say plainly that the corpus does not cover it.
+- You are a single agent working alone: do NOT attempt to delegate or spawn other agents.
+"""
+
 
 def build_coordinator_options() -> ClaudeAgentOptions:
     """The working coordinator: delegation-capable, least-privilege (TR1/TR2).
@@ -112,6 +184,52 @@ def build_coordinator_options() -> ClaudeAgentOptions:
         mcp_servers=_research_mcp_config(),
         allowed_tools=["Agent", _WEB_SEARCH_TOOL],
         agents={"web_search": web_search_agent, "doc_analysis": doc_analysis_agent},
+        strict_mcp_config=True,
+        max_turns=config.MAX_TURNS_BACKSTOP,
+    )
+
+
+def build_sequential_coordinator_options() -> ClaudeAgentOptions:
+    """Phase-1 SEQUENTIAL baseline — identical to the parallel default EXCEPT the prompt.
+
+    Retained ONLY as the benchmark comparison in `benchmark_parallel.py`: it steers the
+    coordinator to delegate one subagent at a time and wait, so the parallel speedup can
+    be measured against it. NOT a path `run_research` ever takes.
+    """
+    return ClaudeAgentOptions(
+        model=config.COORDINATOR_MODEL,
+        system_prompt=_SEQUENTIAL_SYSTEM_PROMPT,
+        tools=["Agent"],
+        mcp_servers=_research_mcp_config(),
+        allowed_tools=["Agent", _WEB_SEARCH_TOOL],
+        agents={"web_search": web_search_agent, "doc_analysis": doc_analysis_agent},
+        strict_mcp_config=True,
+        max_turns=config.MAX_TURNS_BACKSTOP,
+    )
+
+
+def build_single_agent_options() -> ClaudeAgentOptions:
+    """The cheap narrow-lookup fallback: ONE Sonnet agent, no delegation (TR3/TR10).
+
+    `tools=[]` strips the `Agent` delegation tool, structurally guaranteeing no fan-out,
+    and `agents={}` registers no subagents — so a narrow lookup cannot pay the ~15×
+    multi-agent cost. Runs on Sonnet: no Opus coordinator reasoning is warranted for a lookup.
+
+    Uses the IN-PROCESS `research_server` (not the coordinator's external stdio config): a
+    top-level `tools=[]` agent does NOT get the external-stdio tool surfaced (Phase-2
+    diagnostic — it reports "no web_search tool" and answers from memory / declines), but an
+    in-process `create_sdk_mcp_server` IS surfaced to it (the sibling `customer-support`
+    pattern). The subagent "Stream closed" race that forced external stdio does not apply
+    here because this path has no subagents. So the single agent can still `web_search`
+    directly to ground its answer.
+    """
+    return ClaudeAgentOptions(
+        model=config.WORKER_MODEL,
+        system_prompt=_SINGLE_AGENT_SYSTEM_PROMPT,
+        tools=[],
+        mcp_servers={config.MCP_SERVER_NAME: research_server},
+        allowed_tools=[_WEB_SEARCH_TOOL],
+        agents={},
         strict_mcp_config=True,
         max_turns=config.MAX_TURNS_BACKSTOP,
     )
@@ -138,5 +256,18 @@ def build_no_delegation_options() -> ClaudeAgentOptions:
 
 
 async def run_research(question: str) -> AgentRun:
-    """Run one research turn end-to-end and return the structured `AgentRun`."""
-    return await run_turn(question, build_coordinator_options())
+    """Run one research turn, routing via deterministic triage (TR3), and stamp the route.
+
+    A narrow lookup takes the cheap single-agent fallback (no fan-out); a broad question
+    takes the full parallel coordinator. `run.route` is set AFTER `run_turn` returns —
+    the loop itself stays route-agnostic.
+    """
+    route = triage.classify(question)
+    options = (
+        build_single_agent_options()
+        if route == triage.ROUTE_SINGLE_AGENT
+        else build_coordinator_options()
+    )
+    run = await run_turn(question, options)
+    run.route = route
+    return run

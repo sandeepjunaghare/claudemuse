@@ -42,4 +42,7 @@ doc_analysis_agent = AgentDefinition(
     model=config.WORKER_MODEL,
     tools=[_WEB_SEARCH_TOOL],
     mcpServers=[config.MCP_SERVER_NAME],
+    # background=True so this subagent overlaps the others when the coordinator fans out
+    # (Phase-2 spike, Path B — see web_search.py for the full rationale).
+    background=True,
 )

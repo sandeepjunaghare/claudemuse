@@ -42,4 +42,9 @@ web_search_agent = AgentDefinition(
     model=config.WORKER_MODEL,
     tools=[_WEB_SEARCH_TOOL],
     mcpServers=[config.MCP_SERVER_NAME],
+    # background=True → this subagent runs as a background task (Phase-2 spike, Path B):
+    # the coordinator fires delegations back-to-back and their tasks OVERLAP in wall-clock
+    # (spike measured 5 concurrent), which is the real TR2/FR3 parallelism. With
+    # background=False the coordinator blocks on each result inline → sequential.
+    background=True,
 )

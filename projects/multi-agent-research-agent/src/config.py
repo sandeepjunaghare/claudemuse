@@ -21,6 +21,12 @@ COORDINATOR_MODEL = "claude-opus-4-8"
 #: capable retrieval/extraction workers at lower cost than the coordinator.
 WORKER_MODEL = "claude-sonnet-4-6"
 
+#: Trivial-classification tier (TR3). UNUSED by the Phase-2 deterministic triage
+#: (`triage.classify` is a pure function — see triage.py); defined now as the single
+#: source of truth for the DEFERRED LLM-classifier seam, so swapping the heuristic for a
+#: Haiku call later needs no new constant. Precedent: MAX_REFINEMENT_ITERATIONS below.
+CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
+
 # --- Orchestration constants ----------------------------------------------
 
 #: In-process MCP server name; the tool is addressed as ``mcp__research__web_search``.
@@ -34,6 +40,11 @@ MAX_TURNS_BACKSTOP = 20
 #: re-delegate for coverage gaps at most this many times. Defined here now as the
 #: single source of truth; UNUSED until Phase 3.
 MAX_REFINEMENT_ITERATIONS = 2
+
+#: Word-count threshold separating a narrow lookup from a broad question in the Phase-2
+#: deterministic triage (TR3). At or below this AND matching a single-fact interrogative
+#: → single-agent fallback; above it → parallel fan-out. Read by `triage.classify`.
+SIMPLE_QUERY_MAX_WORDS = 12
 
 # --- Env loading -----------------------------------------------------------
 
