@@ -26,6 +26,10 @@ async def main():
     print("OUTCOME:    ", run.subtype)  # 'success' on a clean run
     print("TURNS:      ", run.num_turns, "(backstop is", config.MAX_TURNS_BACKSTOP, ")")
     print("COST (TR10): $", run.total_cost_usd, " | subagent tokens:", run.subagent_total_tokens, sep="")
+    print("COVERAGE (TR4):", run.coverage)  # canonical facet -> status; all 4 covered on a clean run
+    print("GAPS:       ", run.gaps)  # [] when the topic is fully covered
+    print("REFINEMENT ITERATIONS (TR5):", run.refinement_iterations, "(0 = covered on first pass)")
+    print("COVERAGE HISTORY:", run.coverage_history)  # coverage map after each turn (progression)
     print("REPORT:\n")
     print(run.final_text)
 

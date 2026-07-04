@@ -58,3 +58,23 @@ def run_no_delegation():
         return await run_turn(question, build_no_delegation_options())
 
     return _run
+
+
+@pytest.fixture
+def run_partial_then_refine():
+    """Return an async callable that drives the refinement loop from the PARTIAL coordinator.
+
+    Used by the Phase-3 injected-gap acceptance demo (TR5): the partial coordinator
+    under-covers on turn 1, and `_run_with_refinement` re-delegates the missing facets until
+    coverage is complete (or the cap is hit). Lazy SDK import so the deterministic suite is
+    unaffected.
+    """
+    from coordinator import _run_with_refinement, build_partial_coordinator_options
+    from mocks import corpus
+
+    async def _run(question: str):
+        return await _run_with_refinement(
+            question, build_partial_coordinator_options(), corpus.FACETS
+        )
+
+    return _run

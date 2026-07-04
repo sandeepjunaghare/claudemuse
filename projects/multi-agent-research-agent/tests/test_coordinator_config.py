@@ -8,8 +8,10 @@ makes no API call, so these run in the default (non-integration) suite.
 
 import config
 from coordinator import (
+    SYSTEM_PROMPT,
     build_coordinator_options,
     build_no_delegation_options,
+    build_partial_coordinator_options,
     build_sequential_coordinator_options,
     build_single_agent_options,
 )
@@ -74,3 +76,19 @@ def test_sequential_baseline_matches_parallel_except_the_prompt():
     assert set(seq.agents.keys()) == {"web_search", "doc_analysis"}
     assert _WEB_SEARCH_TOOL in seq.allowed_tools
     assert seq.system_prompt != par.system_prompt  # distinct steering
+
+
+def test_partial_coordinator_delegates_but_under_covers():
+    # Phase-3 gap fixture (TR5): delegation-capable in every way the full coordinator is,
+    # but a distinct, deliberately under-covering system prompt.
+    p = build_partial_coordinator_options()
+    assert p.tools == ["Agent"]
+    assert set(p.agents.keys()) == {"web_search", "doc_analysis"}
+    assert _WEB_SEARCH_TOOL in p.allowed_tools
+    assert p.system_prompt != build_coordinator_options().system_prompt
+
+
+def test_system_prompt_carries_coverage_and_partitioning_contract():
+    # TR4: the coordinator is asked to partition facets and emit a machine-readable block.
+    assert "COVERAGE:" in SYSTEM_PROMPT
+    assert "one facet" in SYSTEM_PROMPT.lower()

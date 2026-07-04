@@ -36,9 +36,8 @@ MCP_SERVER_NAME = "research"
 #: never because this cap was hit on a normal run. Asserted in tests.
 MAX_TURNS_BACKSTOP = 20
 
-#: Ceiling on the Phase 3 refinement loop (TR5): after synthesis the coordinator may
-#: re-delegate for coverage gaps at most this many times. Defined here now as the
-#: single source of truth; UNUSED until Phase 3.
+#: Ceiling on the refinement loop (TR5): after synthesis the coordinator may re-delegate
+#: for coverage gaps at most this many times. Used by `coordinator._run_with_refinement`.
 MAX_REFINEMENT_ITERATIONS = 2
 
 #: Word-count threshold separating a narrow lookup from a broad question in the Phase-2

@@ -204,3 +204,100 @@ substitute for retrieval. Both are correctness improvements, not test-gaming.
 **For Phase 3:** scope partitioning (assign distinct facets/source-types per subagent to
 cut duplicate retrieval) + the refinement loop (evaluate coverage, re-delegate gaps,
 re-synthesize up to `MAX_REFINEMENT_ITERATIONS`). `Report.coverage`/`gaps` come alive here.
+
+---
+
+# Phase 3 — Coverage + Refinement (TR4/TR5)
+
+> Goal: the coordinator VERIFIES its report spans the whole topic (kills the "only visual
+> arts" trap) and SELF-HEALS an under-covered pass via a code-orchestrated, bounded
+> refinement loop. Deep plan: `.agents/plans/phase-3-coverage-refinement.md`.
+>
+> Confirmed decisions: refinement loop = **code-orchestrated + bounded** (not in-model /
+> not sessions); coverage signal = structured **`COVERAGE:` block** parsed by a pure
+> evaluator (prose-scan fallback); gap proof = a permanent **partial-coordinator fixture**;
+> `run_research` keeps returning `AgentRun` with coverage/gaps/refinement ATTACHED (like `route`).
+
+## Scope guardrails (what Phase 3 does NOT do)
+- ❌ Full `schemas.Report` assembly with per-claim `Claim`/`SourceRef` parsing → Phase 4
+  (needs claim→source extraction). Phase 3 realizes the coverage/gaps DATA on `AgentRun`.
+- ❌ Structured error envelopes, timeout/retry, conflict/temporal annotation, TR9 rendering → Phase 4.
+- ❌ Subagent-internal facet-arg capture (tool-level partitioning proof) — deferred (TR6 tension).
+  Partitioning is prompt-steered and verified at the REPORT level (coverage spans all facets).
+- Corpus timeout marker (D004) stays inert; a residual gap after the cap is left as data (annotated in Phase 4).
+
+## Steps
+- [~] Task 1 — prompt-contract spike: FOLDED into Task 12's live test (which is itself the
+  contract check) rather than a separate throwaway script — saved a paid run. Contract held
+  first try (see review).
+- [x] Task 2 — `src/coverage_eval.py`: pure evaluator (`parse_coverage_block`, `evaluate`,
+  `canonical_facet`, `facet_mentioned`, alias table, status constants; prose-scan fallback). SDK-free.
+- [x] Task 3 — `loop.py`: `AgentRun` fields `refinement_iterations`, `coverage`, `gaps`,
+  `coverage_history` (set by `run_research`, not the loop); `@property fully_covered`.
+- [x] Task 4 — `coordinator.py`: `SYSTEM_PROMPT` gains one-facet-per-subagent partitioning
+  + the `COVERAGE:` block contract (NOT added to `_SEQUENTIAL_SYSTEM_PROMPT`).
+- [x] Task 5 — `build_partial_coordinator_options()`: delegation-capable but deliberately
+  under-covers (visual art + music only) — permanent live gap fixture.
+- [x] Task 6 — `_build_refinement_prompt()` + `_run_with_refinement()`: bounded loop
+  (evaluate → re-delegate missing facets with prior draft as context → re-synthesize).
+- [x] Task 7 — `run_research()`: route; fan-out path calls `_run_with_refinement(q,
+  build_coordinator_options(), corpus.FACETS)`; single-agent path unchanged.
+- [x] Task 8 — `run_example.py`: print coverage / gaps / refinement iterations / history.
+- [x] Task 9 — `tests/test_coverage.py`: deterministic evaluator table.
+- [x] Task 10 — `tests/test_refinement_loop.py`: bounded loop via monkeypatched `run_turn` (no API).
+- [x] Task 11 — extend `tests/test_coordinator_config.py`: partial builder + `COVERAGE:` contract.
+- [x] Task 12 — `tests/test_phase3_coverage_live.py`: full-coverage happy path + injected-gap refinement.
+- [~] Task 13 — this review appended; memory NOT updated (no new SDK mechanic surfaced);
+  Phase-1/2 live regression DEFERRED by user (Phase-3 live only, to bound cost).
+
+## Validation (Phase 3 done when) — ✅ CORE PASS (Phase-1/2 live regression deferred)
+- [x] Unit suite green + fast: **82 passed, ~1.2s** (57 prior + 25 new; `-m "not integration"`).
+- [x] Broad query: `run.coverage` marks all 4 facets covered, `run.gaps == []` (TR4, live PASS).
+- [x] Injected gap: partial coordinator → `refinement_iterations >= 1` → final `gaps == []` (TR5, live PASS).
+- [x] Loop deterministically bounded by `MAX_REFINEMENT_ITERATIONS` (unit, monkeypatched, no API).
+- [ ] Phase-1/2 live regression — DEFERRED by user (ran Phase-3 live only to bound cost). The
+  broad path's first turn is unchanged when coverage is full on pass 1 (`refinement_iterations==0`),
+  so no behavioral regression is expected. Re-run `pytest -m integration` to confirm when ready.
+
+## Review (Phase 3 — COMPLETE, 2026-07-03)
+
+**Outcome:** The coordinator now VERIFIES coverage and SELF-HEALS gaps. It ends each briefing
+with a machine-readable `COVERAGE:` block; a pure evaluator (`coverage_eval.py`) parses it,
+alias-maps the free-text labels onto `corpus.FACETS`, and computes gaps. `run_research`'s
+fan-out path runs the bounded `_run_with_refinement` loop: on a gap it re-delegates ONLY the
+missing facets (prior draft carried as explicit context, TR2) with the full coordinator, up to
+`MAX_REFINEMENT_ITERATIONS=2`. 82 unit tests + 2 Phase-3 live tests green.
+
+**Live acceptance (both PASS on the first run, 356s):**
+- Broad query → `run.coverage` all 4 facets `covered`, `run.gaps == []` (TR4 — "only visual arts"
+  trap detectable and gone).
+- Partial coordinator under-covers (visual art + music) → `refinement_iterations >= 1` → final
+  `gaps == []`, writing+film now present (TR5 — a real injected gap closed end-to-end).
+
+**What worked**
+- The plan's judgment that Phase 3 had NO new SDK mechanic held — it was pure Python
+  orchestration + one prompt contract. The prompt contract worked first try (no iteration),
+  so the separate Task-1 spike was folded into the live test to save a paid run.
+- The pure evaluator + bounded loop were fully unit-tested BEFORE any API call
+  (monkeypatched `run_turn` proves stop-on-coverage / iterate-on-gap / cap-bounded /
+  `coverage_history` progression). Structure-only assertions throughout.
+- `_run_with_refinement` always uses the full coordinator on refinement turns, so the partial
+  fixture (an under-covering INITIAL config) is corrected by the full coordinator guided by the
+  missing-facet list — a clean way to prove gap-closing without a bespoke recovery path.
+
+**One deliberate deviation from the plan (documented):**
+- The alias table drops the bare substrings the plan itself flagged as collision-prone —
+  `"video"` (→ "music video"), and by the same reasoning `"art"` (→ "artificial"/"recording
+  artists") and `"text"` (→ the visual-art corpus's "text-to-image"). Distinctive aliases
+  (`visual`, `illustrat`, `artwork`, `image`, `painting`; `film`/`movie`/`cinema`; etc.) map the
+  coordinator's labels without cross-facet false positives. Guarded by a unit test
+  (`music video` → music, not film).
+
+**Deliberate Phase-3 boundaries (unchanged, → Phase 4):** full `schemas.Report` assembly with
+per-claim `Claim`/`SourceRef` parsing; structured error envelopes + timeout/retry; conflict/
+temporal annotation; TR9 coverage rendering by content type. The corpus timeout marker (D004)
+stays inert; a residual gap after the cap is left as data.
+
+**For Phase 4:** wire the seeded corpus's conflict pair (D007/D008, 40% vs 55%), dated sources,
+and timeout marker (D004) into real behavior — structured error propagation (retry vs. valid
+empty), claim→source provenance, conflict/temporal annotation, and TR9 coverage rendering.

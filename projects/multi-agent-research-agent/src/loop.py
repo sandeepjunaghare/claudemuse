@@ -101,6 +101,12 @@ class AgentRun:
     delegation_batches: list[list[str]] = field(default_factory=list)  # one list per coordinator msg with ≥1 delegation
     task_events: list[dict] = field(default_factory=list)  # one dict per Task*Message (lifecycle + usage)
     route: Optional[str] = None  # set by run_research() (triage route), not by the loop
+    # Coverage/refinement (TR4/TR5) — like `route`, these are set by run_research()/the
+    # refinement loop AFTER the turn(s); the loop itself stays coverage-agnostic.
+    refinement_iterations: int = 0  # how many refinement turns ran (0 = covered on first pass)
+    coverage: dict = field(default_factory=dict)  # final canonical facet -> status
+    gaps: list = field(default_factory=list)  # final unresolved canonical facets
+    coverage_history: list = field(default_factory=list)  # coverage map after each turn (progression)
     final_text: str = ""
     subtype: Optional[str] = None  # ResultMessage.subtype, e.g. "success" / "error_max_turns"
     stop_reason: Optional[str] = None  # ResultMessage.stop_reason if present
@@ -114,6 +120,11 @@ class AgentRun:
     def terminated_by_cap(self) -> bool:
         """True if the run ended because the `max_turns` backstop was hit (TR1 anti-pattern)."""
         return bool(self.subtype and "max_turns" in self.subtype)
+
+    @property
+    def fully_covered(self) -> bool:
+        """True iff no expected facet remains uncovered after refinement (TR4/TR5)."""
+        return not self.gaps
 
     @property
     def delegated_subagents(self) -> set[str]:

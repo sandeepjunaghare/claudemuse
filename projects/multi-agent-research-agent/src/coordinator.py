@@ -31,10 +31,12 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeAgentOptions
 
 import config
+import coverage_eval
 import triage
 from agents.doc_analysis import doc_analysis_agent
 from agents.web_search import web_search_agent
 from loop import AgentRun, run_turn
+from mocks import corpus
 from tools.server import research_server
 
 _WEB_SEARCH_TOOL = f"mcp__{config.MCP_SERVER_NAME}__web_search"
@@ -74,6 +76,9 @@ sees the whole picture — the subagents work in isolation and report back only 
 How to work:
 - Decompose the question into a few distinct subtopics or facets that together cover \
 the whole topic — do not cover only one facet. Decide ALL the facets up front.
+- Partition the work: assign each facet to a SEPARATE `web_search` delegation — one facet \
+per subagent — so that no two subagents retrieve the same facet (this minimizes duplicate \
+work and guarantees the facets do not overlap).
 - Delegate the actual research using the Agent tool. You have two subagents, and you \
 should use BOTH at least once:
   - `web_search`: give it ONE facet plus query hints; it searches the corpus and \
@@ -104,8 +109,15 @@ written inline as `[source, date]`. Do not drop a source or invent a fact — if
 has no source, it does not belong in the report.
   - Be accurate and concise. Prefer the subagents' distilled findings over your own \
 prior knowledge.
+- End your briefing with a machine-readable coverage report, on its own lines, in EXACTLY \
+this format (a header line, then one line per facet you addressed):
+  COVERAGE:
+  - <facet name>: <covered|partial|gap>
+  Mark a facet `covered` only if you found real sourced evidence for it, `partial` if the \
+evidence was thin, and `gap` if you could not cover it at all. List every facet you set out \
+to research.
 
-Produce the final briefing as your last message.
+Produce the final briefing (with its trailing COVERAGE report) as your last message.
 """
 
 #: Phase-1 SEQUENTIAL prompt, preserved VERBATIM. Retained ONLY as the benchmark baseline
@@ -165,6 +177,42 @@ keywords, or the exact source name/document id, as the `query`.
 exactly as the tool reported them. Do not invent a source; if the search returns nothing, \
 say plainly that the corpus does not cover it.
 - You are a single agent working alone: do NOT attempt to delegate or spawn other agents.
+"""
+
+#: Deliberately UNDER-COVERING coordinator prompt (Phase-3 gap fixture, TR5). Identical
+#: intent to `SYSTEM_PROMPT` — fully delegation-capable, emits a COVERAGE block — EXCEPT it
+#: is told to research only two of the four facets, so its first pass leaves a real coverage
+#: gap for `_run_with_refinement` to close. Text stays benign/research-framed.
+_PARTIAL_SYSTEM_PROMPT = """\
+You are the lead coordinator of a multi-agent research system. Given a research question, \
+you delegate the legwork to specialist subagents and synthesize their findings into a \
+single cited briefing.
+
+For THIS run, restrict your scope: research ONLY the visual art facet and the music facet. \
+Do NOT research writing and do NOT research film — leave those out entirely.
+
+How to work:
+- Delegate the actual research using the Agent tool. Use BOTH subagents at least once:
+  - `web_search`: give it ONE facet (visual art, or music) plus query hints; it searches \
+the corpus and returns a distilled summary with claim->source->date lines.
+  - `doc_analysis`: give it a specific document reference plus an extraction goal to \
+closely read one source.
+- Dispatch your `Agent` delegations BACK-TO-BACK without pausing between them, so your \
+background subagents run concurrently.
+- The subagents inherit NOTHING from you — pass everything they need explicitly in each \
+delegation prompt.
+- You MUST NOT end your turn until you have written the complete synthesized briefing. A \
+message that merely says you have "launched" agents is NOT acceptable — wait for their \
+results, then write the briefing in this same turn.
+- Synthesize ONE briefing yourself, a section per facet you covered. Every claim carries \
+its source and date inline as `[source, date]` exactly as the subagent reported them.
+- End your briefing with a machine-readable coverage report, on its own lines, in EXACTLY \
+this format:
+  COVERAGE:
+  - <facet name>: <covered|partial|gap>
+  one line per facet you actually covered.
+
+Produce the final briefing (with its trailing COVERAGE report) as your last message.
 """
 
 
@@ -255,19 +303,103 @@ def build_no_delegation_options() -> ClaudeAgentOptions:
     )
 
 
-async def run_research(question: str) -> AgentRun:
-    """Run one research turn, routing via deterministic triage (TR3), and stamp the route.
+def build_partial_coordinator_options() -> ClaudeAgentOptions:
+    """Permanent gap fixture (twin of `build_no_delegation_options`): under-covers on purpose.
 
-    A narrow lookup takes the cheap single-agent fallback (no fan-out); a broad question
-    takes the full parallel coordinator. `run.route` is set AFTER `run_turn` returns —
-    the loop itself stays route-agnostic.
+    Delegation-capable in EVERY way `build_coordinator_options()` is (`tools=["Agent"]`, both
+    subagents, external stdio MCP, `strict_mcp_config`, `max_turns`) so it produces a REAL
+    2-facet report — but its `system_prompt` restricts research to visual art + music, leaving
+    a live writing/film gap. Used by the Phase-3 acceptance demo to prove the refinement loop
+    closes an injected gap end-to-end (TR5), not just in a unit test.
+    """
+    return ClaudeAgentOptions(
+        model=config.COORDINATOR_MODEL,
+        system_prompt=_PARTIAL_SYSTEM_PROMPT,
+        tools=["Agent"],
+        mcp_servers=_research_mcp_config(),
+        allowed_tools=["Agent", _WEB_SEARCH_TOOL],
+        agents={"web_search": web_search_agent, "doc_analysis": doc_analysis_agent},
+        strict_mcp_config=True,
+        max_turns=config.MAX_TURNS_BACKSTOP,
+    )
+
+
+def _build_refinement_prompt(question: str, prior_draft: str, missing: list) -> str:
+    """A refinement TURN prompt (not a system prompt) carrying explicit context (TR2/TR5).
+
+    The subagents and a fresh coordinator turn inherit nothing, so the prompt hands over
+    everything: the original question, the prior draft verbatim, and the explicit list of
+    missing facets to fill. The instruction keeps the good sections and adds only the gaps,
+    re-emitting the full COVERAGE block so the evaluator can re-check.
+    """
+    missing_str = ", ".join(missing)
+    return f"""\
+You previously produced this research briefing, but it is INCOMPLETE — it is missing these \
+facets: {missing_str}.
+
+ORIGINAL QUESTION:
+{question}
+
+PRIOR DRAFT (keep its well-covered sections verbatim; do not lose any existing claim or source):
+---
+{prior_draft}
+---
+
+Now COMPLETE the briefing so it covers ALL facets. Delegate to `web_search` for ONLY the \
+missing facets ({missing_str}) — do not re-research the facets already covered above — then \
+produce the FULL updated briefing: keep the existing sections, add a section for each missing \
+facet, and end with the COVERAGE report covering every facet. Every claim keeps its \
+`[source, date]` exactly as the subagent reported it.
+"""
+
+
+async def _run_with_refinement(
+    question: str, initial_options: ClaudeAgentOptions, expected_facets: list
+) -> AgentRun:
+    """Bounded, code-orchestrated coverage-refinement loop (TR5).
+
+    Run the initial turn, evaluate coverage against `expected_facets`, and while gaps remain
+    AND under `config.MAX_REFINEMENT_ITERATIONS`, run a refinement turn (always the FULL
+    coordinator, guided by the explicit missing-facet list + prior draft) and re-evaluate.
+    The counter lives in code, so the bound and the gap-trigger are deterministic and
+    unit-testable (monkeypatched `run_turn`, no API). Coverage/gaps/history are attached to
+    the returned run — the loop overwrites `run` each turn, so its tool-call structure
+    reflects the LAST (final synthesis) turn; cross-turn progression is in `coverage_history`.
+
+    Note: refinement turns ALWAYS use `build_coordinator_options()`, so an under-covering
+    INITIAL config (the partial fixture in tests) is corrected by the full coordinator. In
+    production `initial_options` IS the full coordinator, so this is a no-op difference.
+    """
+    run = await run_turn(question, initial_options)
+    result = coverage_eval.evaluate(run.final_text, expected_facets)
+    history = [result.map]
+    iterations = 0
+    while result.gaps and iterations < config.MAX_REFINEMENT_ITERATIONS:
+        iterations += 1
+        prompt = _build_refinement_prompt(question, run.final_text, result.gaps)
+        run = await run_turn(prompt, build_coordinator_options())
+        result = coverage_eval.evaluate(run.final_text, expected_facets)
+        history.append(result.map)
+    run.refinement_iterations = iterations
+    run.coverage = result.map
+    run.gaps = result.gaps
+    run.coverage_history = history
+    return run
+
+
+async def run_research(question: str) -> AgentRun:
+    """Route via deterministic triage (TR3), then verify coverage and self-heal gaps (TR4/TR5).
+
+    A narrow lookup takes the cheap single-agent fallback (no fan-out, no coverage check). A
+    broad question takes the full parallel coordinator wrapped in the bounded refinement loop,
+    which verifies the report spans all `corpus.FACETS` and re-delegates any gap. `run.route`
+    is stamped LAST; the loop itself stays route- and coverage-agnostic.
     """
     route = triage.classify(question)
-    options = (
-        build_single_agent_options()
-        if route == triage.ROUTE_SINGLE_AGENT
-        else build_coordinator_options()
-    )
-    run = await run_turn(question, options)
+    if route == triage.ROUTE_SINGLE_AGENT:
+        run = await run_turn(question, build_single_agent_options())
+        run.route = route
+        return run  # narrow lookup: no facet coverage / refinement applied
+    run = await _run_with_refinement(question, build_coordinator_options(), corpus.FACETS)
     run.route = route
     return run
