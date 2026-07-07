@@ -38,3 +38,28 @@ def sample_output() -> str:
     return (_ROOT / "tests" / "fixtures" / "sample_claude_output.json").read_text(
         encoding="utf-8"
     )
+
+
+@pytest.fixture
+def ground_truth() -> dict:
+    """The fixture repo's answer key (loaded offline for scorer tests)."""
+    import json
+
+    return json.loads(config.GROUND_TRUTH.read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def sample_findings():
+    """A perfect-review finding list matching the fixture's flaggable cases."""
+    from parse import Finding, Location
+
+    return [
+        Finding(
+            location=Location("src/orders.py", 24),
+            issue="find_order returns None on a miss; order.total derefs None.",
+            severity="high",
+            suggested_fix="Guard for None before accessing attributes.",
+            detected_pattern="none-deref",
+            category="correctness",
+        ),
+    ]

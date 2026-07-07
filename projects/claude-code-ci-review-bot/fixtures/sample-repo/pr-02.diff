@@ -1,0 +1,28 @@
+diff --git a/src/accounts.py b/src/accounts.py
+new file mode 100644
+--- /dev/null
++++ b/src/accounts.py
+@@ -0,0 +1,23 @@
++"""Account lookup helpers.
++
++SEEDED FIXTURE INTENT (pr-02): RE-INTRODUCES the None-deref issue CLASS in a
++DIFFERENT file so the severity-consistency gate can assert the same class gets
++the SAME label as in pr.diff. Same shape as orders.py: ``get`` returns ``None``
++on a miss, then ``.status`` derefs ``None``. Ground-truth (pr-02): ``none-deref``
++(should_flag=true, high, correctness).
++"""
++
++
++def find_account(account_id, db):
++    """Return the account record for ``account_id``."""
++    return db.get(account_id)
++
++
++def account_status(account_id, db):
++    """Report an account's status.
++
++    BUG: ``find_account`` returns ``None`` on a lookup miss, so ``account.status``
++    derefs ``None`` and raises ``AttributeError`` for any unknown id.
++    """
++    account = find_account(account_id, db)
++    return f"Account {account_id} is {account.status}"

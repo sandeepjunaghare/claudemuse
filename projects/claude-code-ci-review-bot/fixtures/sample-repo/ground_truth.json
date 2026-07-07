@@ -1,0 +1,51 @@
+{
+  "diff": "pr.diff",
+  "note": "Answer key for the fixture. NEVER staged into the model's workspace (workspace.py excludes it). Line numbers are new-file numbering in pr.diff.",
+  "cases": [
+    {
+      "id": "none-deref",
+      "file": "src/orders.py",
+      "line": 24,
+      "should_flag": true,
+      "expected_category": "correctness",
+      "expected_severity": "high",
+      "detected_pattern": "none-deref",
+      "requires_integration_pass": false,
+      "note": "General None-deref on a lookup miss; must be flagged by baseline AND enriched."
+    },
+    {
+      "id": "settings-broad-except",
+      "file": "src/settings.py",
+      "line": 10,
+      "should_flag": false,
+      "requires_integration_pass": false,
+      "note": "A broad `except Exception: return default` in settings access. Correct ONLY under the CLAUDE.md policy (settings reads must be total / never raise). The file is deliberately neutral (no inline justification) so the policy lives ONLY in CLAUDE.md — the TR3 lever + idiomatic-but-unusual case; flagged as error-swallowing when CLAUDE.md ABSENT, not flagged when PRESENT."
+    },
+    {
+      "id": "cross-file-key-mismatch",
+      "locations": [
+        {"file": "src/summary.py", "line": 14},
+        {"file": "src/ingest.py", "line": 16}
+      ],
+      "should_flag": true,
+      "expected_category": "correctness",
+      "expected_severity": "critical",
+      "detected_pattern": "cross-file-key-mismatch",
+      "requires_integration_pass": true,
+      "note": "ingest writes 'user_id', summary reads 'userId' -> KeyError. May be reported at EITHER end (producer ingest.py or consumer summary.py); both accepted. Whole-diff single pass may catch it (bonus, not scored); Phase-3 integration pass makes it reliable."
+    }
+  ],
+  "pr02_cases": [
+    {
+      "id": "none-deref",
+      "file": "src/accounts.py",
+      "line": 23,
+      "should_flag": true,
+      "expected_category": "correctness",
+      "expected_severity": "high",
+      "detected_pattern": "none-deref",
+      "requires_integration_pass": false,
+      "note": "Same None-deref CLASS re-introduced in a different file; severity must match pr.diff's none-deref label."
+    }
+  ]
+}

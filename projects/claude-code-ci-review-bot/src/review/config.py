@@ -30,9 +30,35 @@ PROMPT_TEMPLATE = PROJECT_ROOT / ".claude" / "commands" / "review" / "review-dif
 #: tests override to a cheaper tier to cap cost.
 REVIEW_MODEL = "claude-sonnet-4-6"
 
+#: Cheaper tier for ``make metrics`` / integration reviews — caps cost while the
+#: A/B arms stay on the SAME tier so the model is never a confound (mirrors the
+#: sibling ``CLASSIFIER_MODEL``). ``REVIEW_MODEL`` stays the production default.
+BASELINE_MODEL = "claude-haiku-4-5-20251001"
+
 #: Hard timeout (seconds) for a single ``claude -p`` invocation. The backstop that
 #: makes "the pipeline never hangs" (TR1) a guarantee rather than a hope.
 CLAUDE_TIMEOUT_S = 300
+
+# --- Phase 2: fixture + metrics constants (TR3/TR4/TR5) ---
+
+#: The seeded fixture repo = the ground-truth measurement harness (PRD §6).
+FIXTURE_REPO = PROJECT_ROOT / "fixtures" / "sample-repo"
+
+#: The answer key — scored against, NEVER staged into the model's workspace.
+GROUND_TRUTH = FIXTURE_REPO / "ground_truth.json"
+
+#: The pre-TR4/TR5 minimal prompt (the "before" arm of the precision metric).
+BASELINE_PROMPT = PROJECT_ROOT / ".claude" / "commands" / "review" / "review-diff.baseline.md"
+
+#: The enriched prompt (the "after" arm) — alias of the Phase-1 ``PROMPT_TEMPLATE``.
+ENRICHED_PROMPT = PROMPT_TEMPLATE
+
+#: Results store for the before/after precision numbers + TR3 demo.
+METRICS_DIR = PROJECT_ROOT / "data" / "metrics"
+
+#: A finding matches a ground-truth case if same file and ``|line - case.line|``
+#: is within this tolerance (models report hunk lines ±a few).
+LINE_MATCH_TOLERANCE = 3
 
 _loaded = False
 

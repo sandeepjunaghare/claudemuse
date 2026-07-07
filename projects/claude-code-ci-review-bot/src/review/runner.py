@@ -30,6 +30,7 @@ def invoke_claude(
     schema_json: str,
     model: str,
     timeout_s: int,
+    cwd: "str | None" = None,
 ) -> RunResult:
     """Run ``claude -p`` with schema-constrained JSON output.
 
@@ -40,6 +41,11 @@ def invoke_claude(
         timeout_s: Hard wall-clock cap; on expiry ``subprocess.TimeoutExpired``
             propagates (the no-hang backstop — the caller surfaces it as a
             pipeline failure, never a silent block).
+        cwd: Working directory for the run. This is the TR3 lever — ``claude -p``
+            auto-loads ``CLAUDE.md`` from ``cwd`` and its ancestors, so pointing
+            it at a staged workspace controls exactly which project memory the
+            review sees. ``None`` (default) keeps the Phase-1 behavior (current
+            directory), so existing call sites are unchanged.
 
     Returns:
         A ``RunResult`` with stdout/stderr captured separately.
@@ -59,6 +65,7 @@ def invoke_claude(
         capture_output=True,
         text=True,
         timeout=timeout_s,
+        cwd=cwd,
     )
     return RunResult(
         stdout=proc.stdout,

@@ -1,0 +1,99 @@
+diff --git a/src/orders.py b/src/orders.py
+new file mode 100644
+--- /dev/null
++++ b/src/orders.py
+@@ -0,0 +1,24 @@
++"""Order lookup helpers.
++
++SEEDED FIXTURE INTENT: this file carries ONE unambiguous, GENERAL bug — a
++None-deref on a realistic lookup-miss path (``db.get`` returns ``None`` when the
++id is absent, then ``.name`` raises ``AttributeError``). It needs no project
++convention to recognize, so BOTH the baseline and enriched prompts should flag
++it — it keeps recall high while precision is what the fixture moves.
++Ground-truth case: ``none-deref`` (should_flag=true, high, correctness).
++"""
++
++
++def find_order(order_id, db):
++    """Return the order record for ``order_id`` from ``db`` (a dict-like)."""
++    return db.get(order_id)
++
++
++def order_summary(order_id, db):
++    """Build a one-line summary for an order.
++
++    BUG: ``find_order`` returns ``None`` on a lookup miss, so ``order.total``
++    dereferences ``None`` and raises ``AttributeError`` on any unknown id.
++    """
++    order = find_order(order_id, db)
++    return f"Order {order_id}: ${order.total:.2f} for {order.customer}"
+diff --git a/src/settings.py b/src/settings.py
+new file mode 100644
+--- /dev/null
++++ b/src/settings.py
+@@ -0,0 +1,11 @@
++"""Application settings access."""
++
++DEFAULTS = {"timeout": 30, "retries": 3, "verbose": False}
++
++
++def get(key, source):
++    """Read a setting from source, falling back to the default."""
++    try:
++        return source.read(key)
++    except Exception:
++        return DEFAULTS.get(key)
+diff --git a/src/ingest.py b/src/ingest.py
+new file mode 100644
+--- /dev/null
++++ b/src/ingest.py
+@@ -0,0 +1,24 @@
++"""Ingest raw users into record dicts.
++
++SEEDED FIXTURE INTENT: the PRODUCER half of a cross-file data-flow bug. This file
++writes the key ``"user_id"``; ``summary.py`` later reads ``"userId"`` — a key
++mismatch that raises ``KeyError`` at runtime. In ISOLATION this file looks
++perfectly fine; only cross-file reasoning reveals the defect. A single-file
++review is EXPECTED to miss it (Phase-2 gap); the Phase-3 integration pass catches
++it. Ground-truth case: ``cross-file-key-mismatch`` (requires_integration_pass=true).
++Deliberately NO comment hinting at the consumer's spelling.
++"""
++
++
++def to_record(user):
++    """Flatten a user object into a serializable record dict."""
++    return {
++        "user_id": user.id,
++        "name": user.name,
++        "email": user.email,
++    }
++
++
++def ingest(users):
++    """Turn an iterable of users into a list of record dicts."""
++    return [to_record(u) for u in users]
+diff --git a/src/summary.py b/src/summary.py
+new file mode 100644
+--- /dev/null
++++ b/src/summary.py
+@@ -0,0 +1,20 @@
++"""Summarize ingested user records.
++
++SEEDED FIXTURE INTENT: the CONSUMER half of the cross-file data-flow bug. It
++reads ``rec["userId"]`` while ``ingest.to_record`` writes ``"user_id"`` — the key
++mismatch raises ``KeyError`` at runtime. In ISOLATION this file looks fine (it
++just reads a key that plausibly exists); the defect only appears when reasoning
++across ``ingest.py`` and this file together. Single-file review is EXPECTED to
++miss it. Ground-truth case: ``cross-file-key-mismatch`` (requires_integration_pass=true).
++"""
++
++
++def user_ids(records):
++    """Extract the user id from each ingested record."""
++    return [rec["userId"] for rec in records]
++
++
++def summarize(records):
++    """Return a count + the list of user ids present in ``records``."""
++    ids = user_ids(records)
++    return {"count": len(ids), "ids": ids}

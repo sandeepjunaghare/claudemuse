@@ -9,6 +9,7 @@ with the raw output preserved — never a hang, never a silent drop.
 """
 
 import argparse
+import contextlib
 import subprocess
 import sys
 
@@ -17,6 +18,8 @@ import parse
 import post
 import runner
 import schema
+import severity
+import workspace
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -57,6 +60,21 @@ def main(argv: "list[str] | None" = None) -> int:
         default=config.REVIEW_MODEL,
         help=f"Model id for claude -p (default: {config.REVIEW_MODEL}).",
     )
+    parser.add_argument(
+        "--prompt",
+        choices=("enriched", "baseline"),
+        default="enriched",
+        help="Which versioned review prompt to use (default: enriched).",
+    )
+    parser.add_argument(
+        "--repo",
+        default=None,
+        help=(
+            "Optional path to the reviewed project. When given, its CLAUDE.md is "
+            "staged into a temp workspace and used as cwd so the review gains "
+            "project context (TR3)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     config.load_env()
@@ -67,23 +85,35 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"error: cannot read diff file {args.diff!r}: {exc}", file=sys.stderr)
         return 1
 
-    template = _strip_frontmatter(config.PROMPT_TEMPLATE.read_text(encoding="utf-8"))
+    prompt_path = (
+        config.BASELINE_PROMPT if args.prompt == "baseline" else config.ENRICHED_PROMPT
+    )
+    template = _strip_frontmatter(prompt_path.read_text(encoding="utf-8"))
     prompt = _compose_prompt(template, diff)
 
-    try:
-        result = runner.invoke_claude(
-            prompt,
-            schema.as_json_string(),
-            args.model,
-            config.CLAUDE_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired as exc:
-        print(
-            f"error: claude -p timed out after {config.CLAUDE_TIMEOUT_S}s "
-            f"(no-hang backstop tripped): {exc}",
-            file=sys.stderr,
-        )
-        return 1
+    # TR3: when a repo is supplied, stage a clean workspace so claude -p auto-loads
+    # exactly that project's CLAUDE.md (and not the bot-dev one). Default (no
+    # --repo) preserves Phase-1 behavior: cwd=None, current directory.
+    with contextlib.ExitStack() as stack:
+        cwd = None
+        if args.repo:
+            cwd = str(stack.enter_context(workspace.staged(args.repo, True)))
+
+        try:
+            result = runner.invoke_claude(
+                prompt,
+                schema.as_json_string(),
+                args.model,
+                config.CLAUDE_TIMEOUT_S,
+                cwd=cwd,
+            )
+        except subprocess.TimeoutExpired as exc:
+            print(
+                f"error: claude -p timed out after {config.CLAUDE_TIMEOUT_S}s "
+                f"(no-hang backstop tripped): {exc}",
+                file=sys.stderr,
+            )
+            return 1
 
     if result.returncode != 0 or not result.stdout.strip():
         print(
@@ -107,7 +137,10 @@ def main(argv: "list[str] | None" = None) -> int:
         )
         return 1
 
-    post.emit(review.findings)
+    # TR5: apply the canonical severity backstop, then emit most-severe-first.
+    findings = severity.apply_canonical_severity(review.findings)
+    findings = severity.sort_by_severity(findings)
+    post.emit(findings)
     return 0
 
 
