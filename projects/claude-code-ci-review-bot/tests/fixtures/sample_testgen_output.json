@@ -1,0 +1,13 @@
+[
+  {"type": "system", "subtype": "init", "session_id": "golden-testgen", "model": "claude-haiku-4-5-20251001"},
+  {"type": "result", "subtype": "success", "is_error": false, "stop_reason": "tool_use",
+   "terminal_reason": "completed",
+   "result": "{\"tests\":[{\"target\":{\"file\":\"src/discount.py\",\"symbol\":\"apply_discount\"},\"test_name\":\"test_apply_discount_rejects_out_of_range\",\"case\":\"rate-out-of-range\",\"description\":\"A rate above 1 raises ValueError\",\"test_code\":\"import pytest\\nfrom discount import apply_discount\\n\\ndef test_apply_discount_rejects_out_of_range():\\n    with pytest.raises(ValueError):\\n        apply_discount(100, 2)\"}]}",
+   "structured_output": {"tests": [
+     {"target": {"file": "src/discount.py", "symbol": "apply_discount"},
+      "test_name": "test_apply_discount_rejects_out_of_range",
+      "case": "rate-out-of-range",
+      "description": "A rate above 1 raises ValueError",
+      "test_code": "import pytest\nfrom discount import apply_discount\n\ndef test_apply_discount_rejects_out_of_range():\n    with pytest.raises(ValueError):\n        apply_discount(100, 2)"}
+   ]}}
+]

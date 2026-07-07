@@ -274,3 +274,119 @@ Phase 3b; `detected_pattern` quarantine (TR9/FR4) + real `gh --post` are Phase 4
 
 **Next**: Phase 3b — Test generation (FR2), or Phase 4 — Trust loop (TR9/FR4
 `detected_pattern` quarantine + `gh --post`, plus the prompt-context dedupe layer).
+
+## Phase 3b — Test Generation (FR2)
+
+Plan: `.agents/plans/phase-3b-testgen.md`
+Goal: add the second output path — given a change + its existing tests, propose
+**net-new** tests for uncovered behavior and **skip already-covered** cases. Reuses
+the Phase-1/3a spine (headless `claude -p` TR1, schema-as-contract TR2,
+CLAUDE.md-as-context TR3, two-layer dedupe discipline). **Scope: FR2 only** —
+TR9/FR4 quarantine + real `gh --post` stay Phase 4.
+
+### Foundation
+- [x] Verify P1/2/3a interfaces green (offline **80 passed, 11 deselected**;
+      `invoke_claude(cwd=)`, `Finding` field order confirmed against disk)
+- [x] `config.py` — `TESTGEN_PROMPT`, `TESTGEN_REPO`, `TESTGEN_GROUND_TRUTH`,
+      `TESTGEN_DIFF_NAME`, `TESTGEN_EXISTING_TESTS_NAME`
+- [x] `workspace.py` — one-line `_EXCLUDE_GLOBS` generalization
+      (`ground_truth.json` → `*ground_truth.json`; review staging unaffected)
+- [x] `testgen_schema.py` — distinct `TESTGEN_SCHEMA` (`tests` array) +
+      `as_json_string` + `validate_tests_obj` (TR2)
+
+### Fixture (ground truth — a CORRECT function, coverage not bug-finding)
+- [x] `fixtures/testgen-sample/src/discount.py` — correct `apply_discount` with a
+      guarded `ValueError` branch (the uncovered case)
+- [x] `fixtures/testgen-sample/tests/test_discount.py` — existing HAPPY-PATH-only
+      test (the coverage context); NOT collected by the project run (`testpaths=tests`)
+- [x] `fixtures/testgen-sample/testgen.diff` — new-file diff of `discount.py`
+      (+ lines reproduce the file verbatim; generated programmatically)
+- [x] `fixtures/testgen-sample/CLAUDE.md` — TESTING STANDARDS (the test-gen TR3 channel)
+- [x] `fixtures/testgen-sample/testgen_ground_truth.json` — answer key
+      (happy-path=skip, rate-out-of-range=propose, rate-boundary=optional)
+
+### Core + prompt + driver
+- [x] `testgen.py` pure core — `parse_testgen` (mirrors `parse.parse_result`,
+      reuses `parse.ParseError`), `_same_file`, `existing_test_names`,
+      `dedupe_suggestions` (within-run keep-first), `skip_covered` → `(new, skipped)`
+      (the deterministic FR2 backstop), `score_testgen` (keyword-tolerant)
+- [x] `tests/fixtures/sample_testgen_output.json` — golden CLI output (both
+      `structured_output` + `result`-string forms)
+- [x] `.claude/commands/test-gen/generate-tests.md` — versioned prompt
+      (net-new/skip-covered, honor-CLAUDE.md, one few-shot, `{diff}`+`{existing_tests}`)
+- [x] `testgen.py` live driver — `generate_tests` (ONE `claude -p` pass +
+      within-run dedupe), `format_test`/`emit_tests`, `run_testgen_demo`
+- [x] `Makefile` — `test-gen` stub → `run_testgen_demo` (LIVE, one call)
+
+### Testing & validation
+- [x] `test_testgen_schema.py` (offline) — validity, required/type/additionalProperties
+- [x] `test_testgen.py` (offline) — parse (golden/fallback/error/malformed);
+      `existing_test_names`; `dedupe_suggestions`; **`skip_covered` never re-emits a
+      covered test**; `score_testgen`; **orchestration via monkeypatch** (exactly
+      ONE call; prompt carries both diff + existing tests); answer-key exclusion regression
+- [x] `test_testgen_live.py` [integration] — proposes uncovered error path; skips
+      covered happy path; generated code parses (`ast.parse`)
+
+### Validation results
+- [x] Level 1 — `py_compile` all modules/tests/fixtures: **clean**
+- [x] Level 2 — offline suite (`-m "not integration"`): **113 passed, 14 deselected**
+      (was 80; +33 new offline: 8 schema + 25 testgen)
+- [x] Level 3 — integration (`-m integration` testgen_live, haiku): **3 passed in ~47s**
+- [x] Level 4 — `make test-gen`: **proposed net-new: 4, skipped(covered): 0,
+      covered re-proposed: 0, uncovered error-path proposed: True**;
+      `data/metrics/testgen.json` written (matched: rate-out-of-range + rate-boundary)
+- [x] Level 5 — `make ci-review PR=fixtures/pr-01/sample.diff`: **exit 0**, 1 finding
+      (review default path unchanged); review `ground_truth.json` STILL excluded from staging
+- [x] No `anthropic` / `claude-agent-sdk` / `gh` imports (grep clean)
+
+## Review — Phase 3b
+
+**Headline results (fixture ground truth, haiku tier):**
+- **FR2 net-new (the vivid result):** test-gen proposed **4** net-new tests for
+  the uncovered branches of the correct `apply_discount` — the negative-rate and
+  rate-above-one `ValueError` paths (matching `rate-out-of-range`) plus the
+  `rate==0` / `rate==1` boundaries (the bonus `rate-boundary`). `matched` =
+  `[rate-out-of-range, rate-boundary]`, `missing_required` = `[]`.
+- **FR2 skip-covered (the trust guarantee):** the already-covered happy path was
+  **NOT re-proposed** — `covered case re-proposed (should be 0): 0`,
+  `unexpected == []`. Proven deterministically offline (`skip_covered` routes a
+  colliding suggestion to `skipped`, never to `new`) AND live (the model itself
+  skipped it via the prompt-context layer).
+- **Two-layer skip, honestly observed:** `skipped (already covered): 0` at the
+  structural backstop — because the **prompt-context (semantic) layer already did
+  the skipping**: haiku read `test_apply_discount_basic` in `{existing_tests}` and
+  simply didn't propose a happy-path test. The structural `skip_covered` had
+  nothing left to drop. This is the two layers working as designed (semantic
+  catches it first; structural is the deterministic backstop that the offline
+  test exercises directly).
+- **TR7 / ONE call proven offline for free:** `generate_tests` makes exactly ONE
+  `invoke_claude` call, asserted via a call counter under a monkeypatched CLI, and
+  the single prompt provably carries BOTH the diff and the existing tests.
+
+**What worked**
+- The plan's pre-verified interfaces held exactly (`Finding` field order,
+  `invoke_claude(cwd=)`, `parse.parse_result` shape, `metrics._same_file`,
+  `workspace.staged`), so the mirrored `parse_testgen`, the pure skip/dedupe/score
+  functions, and the monkeypatched orchestration test all worked first try.
+- Reusing `parse.ParseError` (one error type) and copying the ~15-line
+  event-locating logic (house pattern) kept the review contract untouched.
+- The clean, correct fixture (no seeded bug) made the covered-vs-uncovered signal
+  unambiguous — haiku proposed the error path and skipped the happy path with **no
+  prompt calibration** (the anticipated sonnet fallback never triggered).
+- The one-line `*ground_truth.json` glob generalization is non-regressive:
+  `ground_truth.json` is still excluded from review staging (verified), and the
+  new `testgen_ground_truth.json` is never staged.
+
+**What didn't (nothing structural)**
+- No deviations from the plan's task list. The only nuance is the honest
+  `skipped: 0` above — not a failure, but the semantic layer pre-empting the
+  structural one. The `ast.parse` check on generated code was **kept** (haiku
+  emitted clean, runnable pytest for all four suggestions).
+
+**Out of scope (Phase 4):** `detected_pattern` dismissal tracking + category
+quarantine (TR9/FR4); real `gh --post` posting; a generic `make test-gen PR=<path>`
+CLI over an arbitrary project's tests; re-run persistence of test suggestions (the
+existing tests file IS the prior).
+
+**Next**: Phase 4 — Trust loop (TR9/FR4 `detected_pattern` quarantine + `gh --post`,
+plus the prompt-context dedupe layer flagged in the Phase-3a review).

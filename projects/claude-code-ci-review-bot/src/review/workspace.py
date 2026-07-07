@@ -29,8 +29,10 @@ from pathlib import Path
 STAGE_EXCLUDE = {"ground_truth.json"}
 
 #: Glob patterns never copied into the model's workspace: eval artifacts (the
-#: answer key + diffs) and build cruft.
-_EXCLUDE_GLOBS = ("*.diff", "ground_truth.json", "__pycache__", "*.pyc")
+#: answer keys (``*ground_truth.json`` — both the review ``ground_truth.json``
+#: and the test-gen ``testgen_ground_truth.json``) + diffs) and build cruft.
+#: ``*`` matches an empty prefix, so ``ground_truth.json`` is still excluded.
+_EXCLUDE_GLOBS = ("*.diff", "*ground_truth.json", "__pycache__", "*.pyc")
 
 
 def stage_workspace(fixture_dir: Path, include_claude_md: bool = True) -> Path:

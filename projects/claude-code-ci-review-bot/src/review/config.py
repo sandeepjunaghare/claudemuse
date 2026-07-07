@@ -81,6 +81,31 @@ PRIOR_FINDINGS_DIR = PROJECT_ROOT / "data" / "prior_findings"
 #: design (TR8/FR3).
 DEDUPE_LINE_TOLERANCE = 3
 
+# --- Phase 3b: test-generation constants (FR2) ---
+
+#: Versioned test-gen prompt template (FR2). Like ``PROMPT_TEMPLATE``, it is NOT
+#: inlined in code or the Makefile; the driver reads this file and substitutes
+#: ``{diff}`` + ``{existing_tests}``.
+TESTGEN_PROMPT = PROJECT_ROOT / ".claude" / "commands" / "test-gen" / "generate-tests.md"
+
+#: The test-gen ground-truth harness — a SEPARATE fixture from ``FIXTURE_REPO``
+#: (whose files carry seeded review bugs and whose CLAUDE.md/metrics are
+#: calibrated for the review precision/TR3 A/B). Test-gen needs a *correct*
+#: function with an unambiguous untested branch (coverage, not bug-finding).
+TESTGEN_REPO = PROJECT_ROOT / "fixtures" / "testgen-sample"
+
+#: The test-gen answer key — scored against, NEVER staged (excluded by the
+#: ``*ground_truth.json`` glob in ``workspace.py``).
+TESTGEN_GROUND_TRUTH = TESTGEN_REPO / "testgen_ground_truth.json"
+
+#: The change-under-test diff filename inside ``TESTGEN_REPO`` (fed into the
+#: prompt, not staged — matches the ``*.diff`` exclusion glob).
+TESTGEN_DIFF_NAME = "testgen.diff"
+
+#: The existing-tests file (relative to ``TESTGEN_REPO``) fed into the prompt as
+#: the coverage context — the prompt-layer of the two-layer FR2 skip.
+TESTGEN_EXISTING_TESTS_NAME = "tests/test_discount.py"
+
 _loaded = False
 
 

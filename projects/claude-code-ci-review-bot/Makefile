@@ -18,9 +18,11 @@ test-unit:
 test-integration:
 	$(PY) -m pytest -m integration -q
 
-# Phase 3 target — not implemented yet.
+# test-gen makes a LIVE claude -p call (needs CLI + ANTHROPIC_API_KEY; haiku
+# tier). Generates net-new tests for the testgen fixture change and skips
+# already-covered cases (FR2). ONE model call per generate. NOT run by `make test`.
 test-gen:
-	@echo "test-gen: not implemented (Phase 3)"
+	PYTHONPATH=$(PYTHONPATH) $(PY) -c "import testgen; testgen.run_testgen_demo()"
 
 # metrics / tr3-demo make LIVE claude -p calls (need CLI + ANTHROPIC_API_KEY;
 # haiku tier). They are effectively integration targets and are NOT run by
