@@ -14,11 +14,14 @@ import subprocess
 import sys
 
 import config
+import dedupe
+import multipass
 import parse
 import post
 import runner
 import schema
 import severity
+import store
 import workspace
 
 
@@ -75,6 +78,25 @@ def main(argv: "list[str] | None" = None) -> int:
             "project context (TR3)."
         ),
     )
+    parser.add_argument(
+        "--mode",
+        choices=("single", "multi"),
+        default="single",
+        help=(
+            "single (default) = one whole-diff pass (Phase-1/2 behavior). "
+            "multi = per-file passes + a cross-file integration pass (TR6/TR7)."
+        ),
+    )
+    parser.add_argument(
+        "--pr-id",
+        dest="pr_id",
+        default=None,
+        help=(
+            "Opt-in PR id enabling duplicate suppression across re-runs (TR8/FR3): "
+            "prior findings are loaded, already-reported issues are suppressed, and "
+            "the current findings are persisted for the next run. Absent = no dedupe."
+        ),
+    )
     args = parser.parse_args(argv)
 
     config.load_env()
@@ -100,13 +122,24 @@ def main(argv: "list[str] | None" = None) -> int:
             cwd = str(stack.enter_context(workspace.staged(args.repo, True)))
 
         try:
-            result = runner.invoke_claude(
-                prompt,
-                schema.as_json_string(),
-                args.model,
-                config.CLAUDE_TIMEOUT_S,
-                cwd=cwd,
-            )
+            if args.mode == "multi":
+                # TR6/TR7: N per-file passes + 1 integration pass, each a fresh
+                # independent claude -p process. review_multipass already applies
+                # canonical severity, within-run dedupe, and severity sort.
+                findings = multipass.review_multipass(
+                    diff,
+                    prompt_path=prompt_path,
+                    model=args.model,
+                    cwd=cwd,
+                )
+            else:
+                result = runner.invoke_claude(
+                    prompt,
+                    schema.as_json_string(),
+                    args.model,
+                    config.CLAUDE_TIMEOUT_S,
+                    cwd=cwd,
+                )
         except subprocess.TimeoutExpired as exc:
             print(
                 f"error: claude -p timed out after {config.CLAUDE_TIMEOUT_S}s "
@@ -115,31 +148,50 @@ def main(argv: "list[str] | None" = None) -> int:
             )
             return 1
 
-    if result.returncode != 0 or not result.stdout.strip():
-        print(
-            f"error: claude -p failed (rc={result.returncode}). "
-            f"stderr:\n{result.stderr}\n--- raw stdout ---\n{result.stdout}",
-            file=sys.stderr,
+    if args.mode == "single":
+        if result.returncode != 0 or not result.stdout.strip():
+            print(
+                f"error: claude -p failed (rc={result.returncode}). "
+                f"stderr:\n{result.stderr}\n--- raw stdout ---\n{result.stdout}",
+                file=sys.stderr,
+            )
+            return 1
+
+        try:
+            review = parse.parse_result(result.stdout)
+        except parse.ParseError as exc:
+            print(f"error: could not parse claude output: {exc}", file=sys.stderr)
+            return 1
+
+        if review.is_error:
+            print(
+                f"error: claude reported an error envelope "
+                f"(terminal_reason={review.terminal_reason})",
+                file=sys.stderr,
+            )
+            return 1
+
+        # TR5: apply the canonical severity backstop, then sort most-severe-first.
+        findings = severity.apply_canonical_severity(review.findings)
+        findings = severity.sort_by_severity(findings)
+
+    # TR8/FR3: optional cross-run dedupe. When --pr-id is given, suppress issues
+    # already reported on a prior run (zero duplicate comments), then persist the
+    # full current set as the prior for the next re-run. Absent = no dedupe, no
+    # store I/O — byte-for-byte the Phase-1/2 emit path.
+    if args.pr_id:
+        prior = store.load_prior(args.pr_id)
+        new, still = dedupe.suppress_prior(
+            findings, prior, tolerance=config.DEDUPE_LINE_TOLERANCE
         )
-        return 1
+        if still:
+            print(
+                f"({len(still)} still-unresolved finding(s) suppressed as duplicates)",
+                file=sys.stderr,
+            )
+        store.save_findings(args.pr_id, findings)
+        findings = new
 
-    try:
-        review = parse.parse_result(result.stdout)
-    except parse.ParseError as exc:
-        print(f"error: could not parse claude output: {exc}", file=sys.stderr)
-        return 1
-
-    if review.is_error:
-        print(
-            f"error: claude reported an error envelope "
-            f"(terminal_reason={review.terminal_reason})",
-            file=sys.stderr,
-        )
-        return 1
-
-    # TR5: apply the canonical severity backstop, then emit most-severe-first.
-    findings = severity.apply_canonical_severity(review.findings)
-    findings = severity.sort_by_severity(findings)
     post.emit(findings)
     return 0
 

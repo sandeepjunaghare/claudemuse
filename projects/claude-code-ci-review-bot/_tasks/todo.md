@@ -170,3 +170,107 @@ fixture, CLAUDE.md as the runtime context channel (TR3), enriched prompt
   asserting a flaky "must miss."
 
 **Next**: Phase 3 — Scale + Dedupe (multi-pass TR6/TR7, dedupe TR8, test-gen FR2).
+
+## Phase 3a — Scale + Dedupe (TR6 / TR7 / TR8 / FR3)
+
+Plan: `.agents/plans/phase-3-scale-dedupe.md`
+Goal: turn the Phase-2 single-pass reviewer into one that scales to large PRs
+(per-file passes + a cross-file integration pass) and suppresses duplicate
+comments across re-runs. **Scope: TR6/TR7/TR8/FR3 only** — test-gen (FR2) is
+Phase 3b; `detected_pattern` quarantine (TR9/FR4) + real `gh --post` are Phase 4.
+
+### Foundation
+- [x] Verify P1/P2 interfaces green (offline **53 passed**; `invoke_claude(cwd=)`,
+      `Finding` field order confirmed against disk)
+- [x] `config.py` — `INTEGRATION_PROMPT`, `PRIOR_FINDINGS_DIR`, `DEDUPE_LINE_TOLERANCE=3`
+- [x] `dedupe.py` — pure `_same_file`, `is_duplicate`, `dedupe` (within-run,
+      keep-first), `suppress_prior` → `(new, still_unresolved)` (never raises)
+- [x] `store.py` — `save_findings`/`load_prior` (loss-free `Finding` round-trip;
+      `base_dir` override for tests; missing store → `[]`), `_pr_id`
+
+### Multipass orchestration + integration prompt (TR6/TR7)
+- [x] `multipass.py` — pure `split_diff` (git/`---`/single/empty) + live driver
+      (`_run_pass`, `review_per_file`, `review_integration`, `review_multipass`)
+      + demo drivers (`run_multipass_demo`, `run_dedupe_demo`)
+- [x] `.claude/commands/review/review-integration.md` — cross-file-only prompt
+      (data-flow/contract triggers, one few-shot, TR5 rubric, `{diff}` block)
+
+### Integration (CLI + store wiring + Make)
+- [x] `cli.py` — `--mode {single,multi}` (default single) + `--pr-id` (opt-in
+      dedupe); defaults byte-for-byte preserved; timeout/exit handling intact
+- [x] `Makefile` — `review-multi` + `dedupe-demo` targets (LIVE multi-pass, noted)
+- [x] `data/prior_findings/.gitkeep` + `.gitignore` (`data/prior_findings/*.json`)
+
+### Testing & validation
+- [x] `test_multipass.py` (offline) — split_diff; **N+1 call count** via
+      monkeypatched `invoke_claude` (TR7 proof); per-file isolation; canonical
+      severity collapse; one-error-pass survives
+- [x] `test_dedupe.py` (offline) — is_duplicate table, keep-first, **zero-dup
+      suppression**, empty-pattern fallback, no mutation
+- [x] `test_store.py` (offline) — round-trip, missing→[], dir creation, `_pr_id`
+- [x] `test_multipass_live.py` [integration] — 4 acceptance demos
+
+### Validation results
+- [x] Level 1 — `py_compile` all modules/tests: **clean**
+- [x] Level 2 — offline suite (`-m "not integration"`): **80 passed, 11 deselected**
+      (was 53; +27 new offline)
+- [x] Level 3 — integration (`-m integration` multipass_live, haiku): **4 passed in ~6m37s**
+- [x] Level 4 — `make review-multi`: **precision 1.0 / recall 1.0, tp/fp/fn=2/0/0**,
+      `cross_file_caught_by_integration: true`, settings-broad-except NOT flagged
+- [x] Level 5 — `make ci-review PR=fixtures/pr-01/sample.diff`: **exit 0**, 1
+      finding (P1/P2 default path unchanged); `test_cli.py` green
+- [x] No `anthropic` / `claude-agent-sdk` / `gh` imports (grep clean)
+
+## Review — Phase 3a
+
+**Headline results (fixture ground truth, haiku tier):**
+- **TR6/TR7 (the vivid result):** per-file isolation passes do **NOT** flag the
+  `cross-file-key-mismatch`; the whole-diff **integration pass DOES** → the
+  cross-file bug is caught **only** by the integration pass. Proven both live
+  (`test_multipass_live`) and deterministically offline (the 5-call fan-out with
+  the cross-file finding appearing only from the integration prompt).
+- **Multipass scores clean:** with `single_pass=False`, both `none-deref` (high)
+  and `cross-file-key-mismatch` (critical) are TPs, `settings-broad-except` not
+  flagged (CLAUDE.md present) → **precision 1.0 / recall 1.0, tp/fp/fn=2/0/0**.
+  The cross-file case flipped from a Phase-2 *known gap* to a scored TP.
+- **TR7 proven offline for free:** `review_multipass` makes exactly **5**
+  independent `invoke_claude` calls (4 per-file + 1 integration), asserted via a
+  call counter under a monkeypatched CLI — no `--continue`/`--resume`, no pass
+  consuming another's output.
+
+**What worked**
+- The plan's pre-verified interfaces held exactly (Finding field order,
+  `invoke_claude(cwd=)`, `metrics._same_file`) — the pure modules and the
+  monkeypatched orchestration test worked first try.
+- `apply_canonical_severity` **before** dedupe makes "no contradictory findings"
+  structurally true: the offline test emits `none-deref` at `low` in one pass and
+  `high` in another; the merged result has it **once at high**.
+- The integration pass caught the cross-file bug on **haiku with no prompt
+  calibration** — the anticipated live risk (fallback to sonnet) never triggered.
+
+**What didn't (and the honest result) — dedupe re-run demo**
+- `make dedupe-demo` prints **"duplicate comments on re-run: 1"**, not 0. Cause:
+  the cross-file bug is reportable at **either valid end** (producer `ingest.py`
+  or consumer `summary.py`), and the model picks a *different end* on the second
+  run. The structural key (file + `detected_pattern` + line-tolerance) correctly
+  treats findings on two different files as distinct, so it can't unify them.
+- This is **not a dedupe bug** — the reliably same-location `none-deref` **is**
+  suppressed (0 dup for it), which is exactly what `test_multipass_live`'s
+  re-run test asserts (it pins `none-deref` precisely to avoid this
+  nondeterminism), and `test_dedupe` proves zero-dup deterministically.
+- **Scope note / gap surfaced:** the plan's *narrative* describes a two-layer
+  dedupe (structural backstop **+** prompt-context layer that feeds prior
+  findings into the re-run prompt to catch semantic dupes across drift). Only the
+  **structural layer + persistence** is in the step-by-step tasks, so that is
+  what was built. Wiring prior findings into the review prompt (the second layer)
+  would resolve the cross-end drift and is the natural Phase-3a follow-up / early
+  Phase-4 item — flagged rather than silently scoped in.
+
+**Deviations from the plan**
+- None structural. Implemented exactly the task list; `import json` kept as a
+  local import inside the demo drivers (matches the "demo-driver-local imports"
+  guidance) rather than at module top, keeping the pure core's import surface
+  stdlib+parse/dedupe/severity only.
+
+**Next**: Phase 3b — Test generation (FR2), or Phase 4 — Trust loop (TR9/FR4
+`detected_pattern` quarantine + `gh --post`, plus the prompt-context dedupe layer).

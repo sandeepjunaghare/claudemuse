@@ -60,6 +60,27 @@ METRICS_DIR = PROJECT_ROOT / "data" / "metrics"
 #: is within this tolerance (models report hunk lines ±a few).
 LINE_MATCH_TOLERANCE = 3
 
+# --- Phase 3a: multi-pass + dedupe constants (TR6/TR7/TR8/FR3) ---
+
+#: The cross-file integration-pass prompt (TR6). A sibling of the per-file
+#: ``review-diff.md``: it sees the WHOLE diff and reports only cross-module /
+#: data-flow / contract defects that per-file isolation provably cannot see.
+INTEGRATION_PROMPT = PROJECT_ROOT / ".claude" / "commands" / "review" / "review-integration.md"
+
+#: Per-PR prior-findings store for duplicate suppression across re-runs
+#: (TR8/FR3). Written on every dedupe-enabled run; distinct store/lifecycle from
+#: ``METRICS_DIR`` (only ``make metrics`` writes that) — do NOT conflate them.
+PRIOR_FINDINGS_DIR = PROJECT_ROOT / "data" / "prior_findings"
+
+#: Two findings are "the same issue" for structural dedupe if same file + same
+#: ``detected_pattern`` and ``|line diff| <= this``. Set equal to
+#: ``LINE_MATCH_TOLERANCE`` deliberately — the same "models report hunk lines
+#: ±a few" reasoning applies. Line drift *beyond* this tolerance across commits
+#: is handled by the prompt-context dedupe layer (prior findings fed to the
+#: model to report only new/unresolved), not this structural key — the two-layer
+#: design (TR8/FR3).
+DEDUPE_LINE_TOLERANCE = 3
+
 _loaded = False
 
 
