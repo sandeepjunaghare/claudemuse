@@ -1,0 +1,15 @@
+diff --git a/src/notify.py b/src/notify.py
+index 1111111..2222222 100644
+--- a/src/notify.py
++++ b/src/notify.py
+@@ -1,3 +1,10 @@
+ import smtplib
+
+
++def find_recipient(users, name):
++    """Return the email for the user named `name`, or None if absent."""
++    match = [u for u in users if u.name == name]
++    if match == None:
++        return None
++    return match[0].email
++

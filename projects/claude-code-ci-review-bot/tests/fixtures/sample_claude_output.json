@@ -1,0 +1,14 @@
+[
+  {"type": "system", "subtype": "init", "session_id": "golden", "model": "claude-haiku-4-5-20251001"},
+  {"type": "result", "subtype": "success", "is_error": false, "stop_reason": "tool_use",
+   "terminal_reason": "completed",
+   "result": "{\"findings\":[{\"location\":{\"file\":\"src/auth.py\",\"line\":42},\"issue\":\"Token compared with == allows timing attack\",\"severity\":\"high\",\"suggested_fix\":\"Use hmac.compare_digest\",\"detected_pattern\":\"timing-unsafe-comparison\",\"category\":\"security\"}]}",
+   "structured_output": {"findings": [
+     {"location": {"file": "src/auth.py", "line": 42},
+      "issue": "Token compared with == allows timing attack",
+      "severity": "high",
+      "suggested_fix": "Use hmac.compare_digest",
+      "detected_pattern": "timing-unsafe-comparison",
+      "category": "security"}
+   ]}}
+]
