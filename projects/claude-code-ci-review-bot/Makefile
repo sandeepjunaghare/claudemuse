@@ -1,7 +1,7 @@
 PY = ../../.venv/bin/python
 PYTHONPATH = src/review
 
-.PHONY: install ci-review test test-unit test-integration test-gen metrics tr3-demo review-multi dedupe-demo
+.PHONY: install ci-review test test-unit test-integration test-gen metrics tr3-demo review-multi dedupe-demo quarantine-demo post-dry-run
 
 install:
 	$(PY) -m pip install -r requirements.txt
@@ -42,3 +42,17 @@ review-multi:
 
 dedupe-demo:
 	PYTHONPATH=$(PYTHONPATH) $(PY) -c "import multipass; multipass.run_dedupe_demo()"
+
+# quarantine-demo is OFFLINE (no CLI, no ANTHROPIC_API_KEY): it loads the
+# committed seed store (fixtures/dismissed_patterns.seed.json) and shows category
+# quarantine (TR9/FR4) — performance + maintainability dropped, correctness +
+# security still emit. Pure; deterministic; not run by `make test`.
+quarantine-demo:
+	PYTHONPATH=$(PYTHONPATH) $(PY) -c "import multipass; multipass.run_quarantine_demo()"
+
+# post-dry-run is OFFLINE and posts NOTHING: it prints the exact `gh pr comment`
+# argv that `--post` would run, so you can see the GitHub call without executing
+# it. (It still makes ONE live claude -p review pass to produce findings; use a
+# --model override or expect the default tier.)
+post-dry-run:
+	PYTHONPATH=$(PYTHONPATH) $(PY) -m cli --diff fixtures/pr-01/sample.diff --post --pr 1 --dry-run < /dev/null

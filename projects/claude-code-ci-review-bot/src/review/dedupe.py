@@ -11,10 +11,14 @@ the Phase-2 severity two-layer pattern):
    already reported in a prior run — matched by file + ``detected_pattern`` +
    line-within-tolerance. This is the guarantee behind "a second commit produces
    zero duplicate comments."
-2. **Prompt-context (elsewhere — ``cli.py`` / the review prompt):** prior
-   findings are fed into the review prompt so the model reports only new /
-   still-unresolved issues, catching semantic dupes when line numbers drift
-   beyond the structural tolerance.
+2. **Prompt-context (implemented in ``cli.py`` / ``multipass.py``):** prior
+   findings are rendered by ``render_prior_findings`` here and injected into the
+   ``{prior_findings}`` slot of the enriched + integration review prompts, so the
+   model itself reports only new / still-unresolved issues — catching semantic
+   dupes when line numbers drift beyond the structural tolerance (and resolving
+   the cross-end drift where the same cross-file bug is reportable at the
+   producer OR consumer file). The structural layer remains the deterministic
+   backstop; the two are belt-and-suspenders.
 
 Identity is ``detected_pattern`` (our controlled slug), NEVER ``issue`` prose —
 the model rewords prose every run, so matching on it would make dedupe
@@ -103,3 +107,29 @@ def suppress_prior(
         else:
             new.append(f)
     return new, still
+
+
+#: Neutral first-run marker so the ``{prior_findings}`` prompt slot always
+#: resolves (no leftover token) and, when empty, does not change model behavior.
+_NO_PRIOR_SENTINEL = "(none — this is the first review of this PR)"
+
+
+def render_prior_findings(prior: "list[Finding]") -> str:
+    """Render prior findings as prompt text the model reads to know what NOT to
+    repeat (the prompt-context dedupe layer).
+
+    Empty ``prior`` → a neutral sentinel (first-run behavior unchanged).
+    Non-empty → a stable, deterministically-sorted (by file, then line) bullet
+    list ``- {file}:{line} [{detected_pattern}] {issue}``. Sorting never relies
+    on input order so the composed prompt is stable across runs — a wobbling
+    prompt would make the semantic layer nondeterministic. Pure, stdlib-only,
+    never raises.
+    """
+    if not prior:
+        return _NO_PRIOR_SENTINEL
+    ordered = sorted(prior, key=lambda f: (f.location.file, f.location.line))
+    return "\n".join(
+        f"- {f.location.file}:{f.location.line} "
+        f"[{(f.detected_pattern or '').strip()}] {f.issue}"
+        for f in ordered
+    )

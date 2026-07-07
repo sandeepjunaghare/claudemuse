@@ -106,6 +106,35 @@ TESTGEN_DIFF_NAME = "testgen.diff"
 #: the coverage context — the prompt-layer of the two-layer FR2 skip.
 TESTGEN_EXISTING_TESTS_NAME = "tests/test_discount.py"
 
+# --- Phase 4: trust loop (TR9/FR4) + gh posting ---
+#
+# Seed-vs-runtime store separation (documented deviation from the PRD, which
+# names a single ``data/dismissed_patterns.json``): a file that is BOTH committed
+# (demo input) AND mutated at runtime causes git churn and non-reproducible
+# demos. So the *committed* demo input lives under ``fixtures/`` and the
+# *runtime* accrual store lives under ``data/`` (gitignored). The offline
+# ``make quarantine-demo`` reads the seed; ``instrument --dismiss`` writes the
+# runtime store.
+
+#: Runtime dismissal store — accrues per-``detected_pattern`` dismissals across
+#: runs (written by ``instrument --dismiss``; read by the CLI quarantine filter).
+#: Gitignored like the other ``data/`` artifacts — see ``DISMISSED_PATTERNS_SEED``.
+DISMISSED_PATTERNS_STORE = PROJECT_ROOT / "data" / "dismissed_patterns.json"
+
+#: Committed seed store driving the deterministic OFFLINE quarantine demo. Kept
+#: under ``fixtures/`` (not ``data/``) so it is stable/reproducible and never
+#: churned by a runtime write — the runtime store is ``DISMISSED_PATTERNS_STORE``.
+DISMISSED_PATTERNS_SEED = PROJECT_ROOT / "fixtures" / "dismissed_patterns.seed.json"
+
+#: A category auto-quarantines when its dismissal rate (Σdismissed/Σemitted over
+#: its patterns) reaches this threshold — the noise ceiling a wary team tolerates.
+QUARANTINE_RATE_THRESHOLD = 0.5
+
+#: Minimum Σemitted per category to be *eligible* for auto-quarantine. Guards
+#: against one or two dismissals nuking a whole (coarse) category: a rare pattern
+#: dismissed 2/2 times is 100% but must NOT quarantine its category on that alone.
+QUARANTINE_MIN_SAMPLE = 3
+
 _loaded = False
 
 

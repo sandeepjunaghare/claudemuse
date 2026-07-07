@@ -15,6 +15,7 @@ import sys
 
 import config
 import dedupe
+import instrument
 import multipass
 import parse
 import post
@@ -39,13 +40,15 @@ def _strip_frontmatter(text: str) -> str:
     return text
 
 
-def _compose_prompt(template: str, diff: str) -> str:
-    """Substitute the diff into the template.
+def _compose_prompt(template: str, diff: str, prior_text: str = "") -> str:
+    """Substitute the diff (and any prior findings) into the template.
 
     Uses ``str.replace`` (not ``str.format``) because diffs contain ``{`` / ``}``
-    characters that would break ``format``.
+    characters that would break ``format``. ``prior_text`` fills the
+    ``{prior_findings}`` slot (the semantic dedupe layer); a template lacking the
+    token (e.g. the baseline prompt) makes the replace a harmless no-op.
     """
-    return template.replace("{diff}", diff)
+    return template.replace("{diff}", diff).replace("{prior_findings}", prior_text)
 
 
 def main(argv: "list[str] | None" = None) -> int:
@@ -97,7 +100,38 @@ def main(argv: "list[str] | None" = None) -> int:
             "the current findings are persisted for the next run. Absent = no dedupe."
         ),
     )
+    parser.add_argument(
+        "--post",
+        action="store_true",
+        help=(
+            "Post findings to a real PR via `gh pr comment` (FR1; opt-in — default "
+            "emits to stdout). Requires --pr. Use --dry-run to preview the gh argv."
+        ),
+    )
+    parser.add_argument(
+        "--pr",
+        default=None,
+        help="PR number / URL / branch to post to (required with --post).",
+    )
+    parser.add_argument(
+        "--gh-repo",
+        dest="gh_repo",
+        default=None,
+        help=(
+            "Optional OWNER/REPO for `gh pr comment --repo` (the POST target). "
+            "Distinct from --repo, which stages a project's CLAUDE.md for TR3."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --post, print the exact gh argv instead of executing it.",
+    )
     args = parser.parse_args(argv)
+
+    if args.post and not args.pr:
+        print("error: --post requires --pr <number|url|branch>", file=sys.stderr)
+        return 1
 
     config.load_env()
 
@@ -111,7 +145,14 @@ def main(argv: "list[str] | None" = None) -> int:
         config.BASELINE_PROMPT if args.prompt == "baseline" else config.ENRICHED_PROMPT
     )
     template = _strip_frontmatter(prompt_path.read_text(encoding="utf-8"))
-    prompt = _compose_prompt(template, diff)
+
+    # TR8 semantic dedupe layer: load prior findings (empty when no --pr-id) and
+    # render them into the prompt so the model itself reports only new/unresolved
+    # issues. The structural backstop (suppress_prior, below) still runs. An empty
+    # prior renders a neutral sentinel, so first-run behavior is unchanged.
+    prior = store.load_prior(args.pr_id) if args.pr_id else []
+    prior_text = dedupe.render_prior_findings(prior)
+    prompt = _compose_prompt(template, diff, prior_text)
 
     # TR3: when a repo is supplied, stage a clean workspace so claude -p auto-loads
     # exactly that project's CLAUDE.md (and not the bot-dev one). Default (no
@@ -131,6 +172,7 @@ def main(argv: "list[str] | None" = None) -> int:
                     prompt_path=prompt_path,
                     model=args.model,
                     cwd=cwd,
+                    prior_findings=prior,
                 )
             else:
                 result = runner.invoke_claude(
@@ -175,12 +217,13 @@ def main(argv: "list[str] | None" = None) -> int:
         findings = severity.apply_canonical_severity(review.findings)
         findings = severity.sort_by_severity(findings)
 
-    # TR8/FR3: optional cross-run dedupe. When --pr-id is given, suppress issues
-    # already reported on a prior run (zero duplicate comments), then persist the
-    # full current set as the prior for the next re-run. Absent = no dedupe, no
-    # store I/O — byte-for-byte the Phase-1/2 emit path.
+    # TR8/FR3: optional cross-run dedupe (structural backstop to the semantic
+    # prompt layer above). When --pr-id is given, suppress issues already reported
+    # on a prior run (zero duplicate comments), then persist the ACCUMULATED prior
+    # (dedupe(prior + current)) so a previously-reported issue is never forgotten
+    # even if the model declined to re-emit it. Absent = no dedupe, no store I/O —
+    # byte-for-byte the Phase-1/2 emit path (``prior`` is [] and this block skips).
     if args.pr_id:
-        prior = store.load_prior(args.pr_id)
         new, still = dedupe.suppress_prior(
             findings, prior, tolerance=config.DEDUPE_LINE_TOLERANCE
         )
@@ -189,8 +232,38 @@ def main(argv: "list[str] | None" = None) -> int:
                 f"({len(still)} still-unresolved finding(s) suppressed as duplicates)",
                 file=sys.stderr,
             )
-        store.save_findings(args.pr_id, findings)
+        accumulated = dedupe.dedupe(
+            prior + findings, tolerance=config.DEDUPE_LINE_TOLERANCE
+        )
+        store.save_findings(args.pr_id, accumulated)
         findings = new
+
+    # TR9/FR4: quarantine filter. A category whose dismissal rate crossed the
+    # threshold (with enough samples) — or one on the manual override list — is
+    # filtered out so it can't poison trust in the rest. Reads the RUNTIME store,
+    # which is absent by default → no quarantined categories → a no-op that leaves
+    # the default `ci-review` path byte-for-byte unchanged.
+    quarantined = instrument.quarantined_categories(
+        instrument.load_store(),
+        threshold=config.QUARANTINE_RATE_THRESHOLD,
+        min_sample=config.QUARANTINE_MIN_SAMPLE,
+    )
+    findings, dropped = instrument.apply_quarantine(findings, quarantined)
+    if dropped:
+        print(
+            f"({len(dropped)} finding(s) filtered by quarantined categories: "
+            f"{', '.join(quarantined)})",
+            file=sys.stderr,
+        )
+
+    # FR1: emit (default) or post to a real PR via gh (opt-in --post).
+    if args.post:
+        rc = post.post_via_gh(
+            findings, args.pr, repo=args.gh_repo, dry_run=args.dry_run
+        )
+        if rc != 0:
+            print(f"error: gh pr comment failed (rc={rc})", file=sys.stderr)
+        return rc
 
     post.emit(findings)
     return 0

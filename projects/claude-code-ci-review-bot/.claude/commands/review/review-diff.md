@@ -85,6 +85,14 @@ PRs**:
   concise new slug.
 - `category`: one of `correctness`, `security`, `performance`, `maintainability`.
 
+## Previously reported on this PR (do NOT repeat)
+
+The issues below were already reported on an earlier commit of this PR. Report
+ONLY new or still-unresolved issues. Do NOT re-report an issue already listed
+here if it is unchanged.
+
+{prior_findings}
+
 Unified diff to review:
 
 ```diff

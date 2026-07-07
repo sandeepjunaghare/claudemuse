@@ -71,6 +71,15 @@ empty `findings` array.
   applies — `cross-file-key-mismatch`, `key-error` — else a concise new slug.
 - `category`: one of `correctness`, `security`, `performance`, `maintainability`.
 
+## Previously reported on this PR (do NOT repeat)
+
+The cross-file issues below were already reported on an earlier commit of this
+PR. Report ONLY new or still-unresolved cross-file issues. Do NOT re-report an
+issue already listed here if it is unchanged — including the same defect pointed
+at from the other file's end.
+
+{prior_findings}
+
 Unified diff to review (all files):
 
 ```diff

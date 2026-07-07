@@ -123,3 +123,29 @@ def test_suppress_prior_does_not_mutate_inputs():
     c0, p0 = list(current), list(prior)
     dedupe.suppress_prior(current, prior, tolerance=TOL)
     assert current == c0 and prior == p0
+
+
+# --- render_prior_findings (semantic dedupe layer, Phase 4) ------------------
+
+
+def test_render_prior_findings_empty_is_sentinel():
+    text = dedupe.render_prior_findings([])
+    assert "first review" in text
+
+
+def test_render_prior_findings_lists_each_with_stable_order():
+    # Deliberately out-of-order input; output must sort by (file, line).
+    findings = [
+        _f("src/summary.py", 14, "cross-file-key-mismatch"),
+        _f("src/orders.py", 24, "none-deref"),
+    ]
+    text = dedupe.render_prior_findings(findings)
+    # each finding's file, line, and slug appear
+    assert "src/orders.py:24" in text
+    assert "src/summary.py:14" in text
+    assert "none-deref" in text
+    assert "cross-file-key-mismatch" in text
+    # stable ordering regardless of input order (orders.py sorts before summary.py)
+    assert text.index("src/orders.py") < text.index("src/summary.py")
+    # order-independence: shuffling the input yields the same text
+    assert dedupe.render_prior_findings(list(reversed(findings))) == text

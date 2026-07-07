@@ -138,15 +138,20 @@ def _run_pass(
     diff_text: str,
     model: str,
     cwd: "str | None",
+    prior_text: str = "",
 ) -> "list[Finding]":
     """Run ONE independent ``claude -p`` pass and return its findings.
 
     A fresh ``invoke_claude`` call = a fresh process with no shared context
     (TR7). Tolerant of an error/empty review (``is_error`` → ``[]``) so one bad
     pass does not sink the whole multipass run. Uses ``str.replace`` (not
-    ``str.format``) because diffs contain ``{`` / ``}``.
+    ``str.format``) because diffs contain ``{`` / ``}``. ``prior_text`` fills the
+    ``{prior_findings}`` slot (the semantic dedupe layer); a template lacking the
+    token makes the replace a harmless no-op.
     """
-    prompt = prompt_template.replace("{diff}", diff_text)
+    prompt = prompt_template.replace("{diff}", diff_text).replace(
+        "{prior_findings}", prior_text
+    )
     result = runner.invoke_claude(
         prompt,
         schema.as_json_string(),
@@ -164,6 +169,7 @@ def review_per_file(
     model: str,
     *,
     cwd: "str | None" = None,
+    prior_findings: "list[Finding] | None" = None,
 ) -> "list[Finding]":
     """Review each file in the diff in its OWN isolated pass (TR6/TR7).
 
@@ -172,11 +178,14 @@ def review_per_file(
     cannot connect a producer/consumer key mismatch across files. Findings are
     concatenated and within-run deduped. (Sequential is fine and deterministic
     for the fixture; the passes are independent and could be parallelized.)
+    ``prior_findings`` (if any) are rendered once and injected into each pass's
+    ``{prior_findings}`` slot (the semantic dedupe layer, TR8).
     """
     template = _load_template(prompt_path)
+    prior_text = dedupe.render_prior_findings(prior_findings or [])
     all_findings: "list[Finding]" = []
     for fd in split_diff(diff_text):
-        all_findings.extend(_run_pass(template, fd.text, model, cwd))
+        all_findings.extend(_run_pass(template, fd.text, model, cwd, prior_text))
     return dedupe.dedupe(all_findings, tolerance=config.DEDUPE_LINE_TOLERANCE)
 
 
@@ -186,14 +195,18 @@ def review_integration(
     model: str,
     *,
     cwd: "str | None" = None,
+    prior_findings: "list[Finding] | None" = None,
 ) -> "list[Finding]":
     """Run the single cross-file integration pass over the WHOLE diff (TR6/TR7).
 
     One fresh ``claude -p`` instance sees all files at once — the only pass that
-    can catch cross-module / data-flow / contract defects.
+    can catch cross-module / data-flow / contract defects. ``prior_findings``
+    feed the ``{prior_findings}`` slot so the pass won't re-report an issue
+    already reported at the other file's end (the cross-end drift fix, TR8).
     """
     template = _load_template(integration_prompt_path)
-    return _run_pass(template, diff_text, model, cwd)
+    prior_text = dedupe.render_prior_findings(prior_findings or [])
+    return _run_pass(template, diff_text, model, cwd, prior_text)
 
 
 def review_multipass(
@@ -203,6 +216,7 @@ def review_multipass(
     integration_prompt_path=None,
     model: str,
     cwd: "str | None" = None,
+    prior_findings: "list[Finding] | None" = None,
 ) -> "list[Finding]":
     """Full multipass review: N per-file passes + 1 integration pass (TR6/TR7).
 
@@ -210,7 +224,9 @@ def review_multipass(
     keep-first on any overlap. ``apply_canonical_severity`` runs BEFORE dedupe so
     a per-file and an integration report of the same pattern carry identical
     severity and collapse cleanly → "no contradictory findings" is structurally
-    true. Returns the merged, deduped, severity-sorted findings.
+    true. ``prior_findings`` (from a prior run) are threaded into every pass's
+    ``{prior_findings}`` slot (the semantic dedupe layer, TR8). Returns the
+    merged, deduped, severity-sorted findings.
     """
     prompt_path = prompt_path if prompt_path is not None else config.ENRICHED_PROMPT
     integration_prompt_path = (
@@ -218,8 +234,16 @@ def review_multipass(
         if integration_prompt_path is not None
         else config.INTEGRATION_PROMPT
     )
-    per_file = review_per_file(diff_text, prompt_path, model, cwd=cwd)
-    integ = review_integration(diff_text, integration_prompt_path, model, cwd=cwd)
+    per_file = review_per_file(
+        diff_text, prompt_path, model, cwd=cwd, prior_findings=prior_findings
+    )
+    integ = review_integration(
+        diff_text,
+        integration_prompt_path,
+        model,
+        cwd=cwd,
+        prior_findings=prior_findings,
+    )
     merged = integ + per_file  # integration first (keep-first wins on overlap)
     canonical = severity.apply_canonical_severity(merged)
     deduped = dedupe.dedupe(canonical, tolerance=config.DEDUPE_LINE_TOLERANCE)
@@ -288,9 +312,11 @@ def run_multipass_demo() -> dict:
 def run_dedupe_demo() -> dict:
     """``make dedupe-demo``: multipass twice on ``pr.diff``; zero dupes on re-run.
 
-    Runs ``review_multipass`` once (saved as the prior), runs it again, then
-    ``suppress_prior`` against the saved prior — the second-run NEW comments
-    should be ~0 (all issues already reported).
+    Runs ``review_multipass`` once (saved as the prior), then runs it again with
+    the first run's findings threaded in as ``prior_findings=`` (the semantic
+    dedupe layer — the model itself won't re-report, including at the OTHER
+    cross-file end). Finally ``suppress_prior`` against the saved prior (the
+    structural backstop). The second-run NEW comments should be ~0.
     """
     import store
     import workspace
@@ -302,7 +328,12 @@ def run_dedupe_demo() -> dict:
     store.save_findings("demo", first)
 
     with workspace.staged(config.FIXTURE_REPO, include_claude_md=True) as ws:
-        second = review_multipass(diff_text, model=config.BASELINE_MODEL, cwd=str(ws))
+        second = review_multipass(
+            diff_text,
+            model=config.BASELINE_MODEL,
+            cwd=str(ws),
+            prior_findings=first,  # semantic layer: tell the model what NOT to repeat
+        )
 
     new, still = dedupe.suppress_prior(
         second, store.load_prior("demo"), tolerance=config.DEDUPE_LINE_TOLERANCE
@@ -315,3 +346,51 @@ def run_dedupe_demo() -> dict:
         f"\nduplicate comments on re-run: {len(new)}"
     )
     return {"first": first, "second": second, "new": new, "still": still}
+
+
+def run_quarantine_demo() -> dict:
+    """``make quarantine-demo``: OFFLINE proof of category quarantine (TR9/FR4).
+
+    No ``claude -p``, no API key. Loads the committed seed store, builds a
+    hand-authored finding across all four categories, computes the quarantined
+    categories, applies the filter, and prints that performance +
+    maintainability are dropped while correctness + security still emit.
+    """
+    import instrument
+    import post
+    from parse import Finding, Location
+
+    seed = instrument.load_store(path=config.DISMISSED_PATTERNS_SEED)
+    quarantined = instrument.quarantined_categories(
+        seed,
+        threshold=config.QUARANTINE_RATE_THRESHOLD,
+        min_sample=config.QUARANTINE_MIN_SAMPLE,
+    )
+
+    def _f(pattern, category):
+        return Finding(
+            location=Location(f"src/{category}.py", 1),
+            issue=f"seeded {category} finding",
+            severity="high",
+            suggested_fix="fix",
+            detected_pattern=pattern,
+            category=category,
+        )
+
+    findings = [
+        _f("none-deref", "correctness"),
+        _f("speculative-perf", "performance"),
+        _f("style-nit", "maintainability"),
+        _f("rare-guess", "security"),
+    ]
+    kept, dropped = instrument.apply_quarantine(findings, quarantined)
+
+    print(
+        f"quarantined categories: {quarantined}"
+        f"\nfindings before quarantine: {len(findings)}"
+        f"\nfindings after quarantine:  {len(kept)}"
+        f"\ndropped: {[f.category for f in dropped]}"
+        f"\nsurviving: {[f.category for f in kept]}"
+    )
+    post.emit(kept)
+    return {"quarantined": quarantined, "kept": kept, "dropped": dropped}

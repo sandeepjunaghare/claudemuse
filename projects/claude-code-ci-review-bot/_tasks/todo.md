@@ -390,3 +390,131 @@ existing tests file IS the prior).
 
 **Next**: Phase 4 — Trust loop (TR9/FR4 `detected_pattern` quarantine + `gh --post`,
 plus the prompt-context dedupe layer flagged in the Phase-3a review).
+
+## Phase 4 — Trust Loop (TR9 / FR4 + gh --post + semantic dedupe)
+
+Plan: `.agents/plans/phase-4-trust-loop.md`
+Goal: close the trust loop — dismissed-finding instrumentation + category
+quarantine (TR9/FR4), real `gh` PR posting behind `--post` (FR1), and the
+prompt-context (semantic) dedupe layer that completes the two-layer TR8 design
+and resolves the Phase-3a cross-end drift. **All four sub-features offline-first.**
+
+**Deviation note (documented):** the PRD names a single `data/dismissed_patterns.json`;
+Phase 4 splits it into a **committed seed** (`fixtures/dismissed_patterns.seed.json`,
+the deterministic demo input) and a **gitignored runtime store**
+(`data/dismissed_patterns.json`, accrued dismissals) — a file that is both
+committed and runtime-mutated causes git churn and non-reproducible demos.
+
+### Foundation
+- [x] `config.py` — `DISMISSED_PATTERNS_STORE`, `DISMISSED_PATTERNS_SEED`,
+      `QUARANTINE_RATE_THRESHOLD=0.5`, `QUARANTINE_MIN_SAMPLE=3` (`#:`-doc-commented)
+- [x] `fixtures/dismissed_patterns.seed.json` — 4 patterns / 4 categories; the
+      demo story (perf 0.75 + maint 0.70 quarantine; security 2/2 min-sample-protected;
+      correctness 0/12 clean)
+
+### Core (pure + store I/O)
+- [x] `instrument.py` — `record_emitted`/`record_dismissal` (NEW store, no mutation);
+      `category_dismissal_rates`/`category_sample_sizes` (ZeroDivision-guarded);
+      `auto_quarantined` (rate + min-sample gate); `quarantined_categories` (auto ∪
+      manual); `apply_quarantine` → `(kept, dropped)`; `load_store`/`save_store`
+      (`path=` override; missing → default); thin `main(--dismiss)` ops CLI
+- [x] `post.py` — `format_review_body`, `build_gh_comment_args` (pure argv),
+      `post_via_gh` (injectable `run`; `dry_run` short-circuit). `emit`/`format_comment`
+      byte-for-byte unchanged; `gh` only ever a subprocess argv (never imported)
+- [x] `dedupe.py` — `render_prior_findings` (empty → sentinel; non-empty → stable
+      sorted bullets); two-layer docstring corrected from aspirational → implemented
+
+### Prompts + orchestration wiring
+- [x] `review-diff.md` + `review-integration.md` — `## Previously reported` block +
+      `{prior_findings}` token (baseline prompt UNTOUCHED — frozen metrics arm)
+- [x] `multipass.py` — `prior_findings=` threaded through per-file/integration/
+      multipass; `_run_pass` `prior_text` kwarg; `run_dedupe_demo` feeds run-1 as
+      prior into run-2; `run_quarantine_demo` (OFFLINE)
+- [x] `cli.py` — `_compose_prompt` prior slot; prior loaded once (semantic layer +
+      structural backstop); accumulation `dedupe(prior+current)`; quarantine filter
+      before emit; `--post`/`--pr`/`--gh-repo`/`--dry-run` branch (`--gh-repo` kept
+      distinct from TR3 `--repo`); `import instrument`
+- [x] `.gitignore` (`data/dismissed_patterns.json`); `Makefile` (`quarantine-demo`,
+      `post-dry-run` + `.PHONY`)
+
+### Testing & validation
+- [x] `test_instrument.py` (offline, 16) — store round-trip; record no-mutation;
+      rates on seed shape; **auto_quarantined min-sample gate**; manual override;
+      **apply_quarantine FR4 headline**; seed regression-lock
+- [x] `test_post.py` (extend) — body location coverage; argv shape (±repo);
+      **dry-run never shells out**; executes-when-not-dry via injected fake runner;
+      skip-by-default real-`gh` test (`CI_REVIEW_LIVE_PR`)
+- [x] `test_dedupe.py` (extend) — render sentinel + stable order-independent listing
+- [x] `test_cli.py` (extend) — prompt carries prior slug; quarantine filters before
+      emit; default path unchanged (absent store); `--post` requires `--pr`;
+      `--post --dry-run` prints gh argv
+- [x] `test_dedupe_semantic_live.py` [integration] — two-run multipass with prior
+      injected → 0 new `none-deref`
+
+### Validation results
+- [x] Level 1 — `py_compile` all touched modules + seed JSON load: **clean**
+- [x] Level 2 — offline suite (`-m "not integration"`): **141 passed, 16 deselected**
+      (was 113; +28 offline: 16 instrument + 5 post + 5 cli + 2 dedupe)
+- [x] Level 3 — `test_dedupe_semantic_live.py` [integration, haiku]: **1 passed in ~3m36s**
+- [x] Level 4 — `make quarantine-demo` (OFFLINE): quarantined=`[maintainability,
+      performance]`, correctness+security survive; `make post-dry-run`: prints
+      `DRY RUN — would run: gh pr comment 1 --body …`, posts nothing, exit 0;
+      `make dedupe-demo` (LIVE x2): **duplicate comments on re-run: 0** (was 1)
+- [x] Level 5 — `make ci-review PR=fixtures/pr-01/sample.diff`: **exit 0, 1 finding,
+      no quarantine note** (default path byte-for-byte unchanged); grep for
+      `anthropic`/`claude_agent_sdk`/lib-`gh`: **clean**; `data/dismissed_patterns.json`
+      gitignored
+
+## Review — Phase 4
+
+**Headline results:**
+- **TR9/FR4 quarantine (the FR4 gate), proven deterministically offline:**
+  `apply_quarantine(findings, ["performance","maintainability"])` keeps exactly
+  the correctness + security findings and drops the other two — one noisy category
+  disabled without losing the good ones. The min-sample guard protects a rare
+  100%-dismissed category (`security` 2/2) from nuking the whole category; a
+  `manual_quarantine` entry forces a category regardless of rate.
+- **Semantic dedupe layer (TR8 completion) — the cross-end drift is resolved:**
+  `make dedupe-demo` now prints **duplicate comments on re-run: 0** (Phase 3a was
+  1). Feeding the first run's findings into the `{prior_findings}` prompt slot
+  makes the model report nothing new on the re-run; the structural `suppress_prior`
+  remains the deterministic backstop. Proven live in `test_dedupe_semantic_live`.
+- **`gh --post` real but safe:** `--post` posts via `gh pr comment` only with
+  `--pr`; `--post --dry-run` prints the exact argv and posts nothing; the argv
+  builder + dry-run short-circuit are unit-tested with an injected fake runner (no
+  shell-out in `make test`). Emit stays the default (PRD Risk #6).
+
+**What worked**
+- The pure-core + file-store split (mirroring `dedupe.py`/`store.py`) meant every
+  quarantine/dedupe/post-builder assertion runs offline with no key — the whole
+  trust loop is provable in `make test` (1.2s), with only two live checks
+  (`test_dedupe_semantic_live`, `make dedupe-demo`).
+- The plan's pre-verified idioms held exactly (`Finding` field order, `store.py`
+  `path=`/`base_dir` override, `severity.replace` no-mutation, `str.replace`
+  prompt composition), so `instrument.py` and its 16 tests worked first try; the
+  seed's quarantine story matched the plan's numbers on the first run.
+- The byte-for-byte default-path discipline held: the quarantine filter over an
+  absent runtime store is a no-op, and the `{prior_findings}` sentinel on a
+  no-`--pr-id` run leaves `make ci-review` unchanged (Level 5 confirmed 1 finding,
+  exit 0, no quarantine note).
+
+**What didn't (nothing structural)**
+- No deviations from the plan's task list. The one honest nuance in `dedupe-demo`:
+  the second run returned **0 findings total** (not "2 findings, both suppressed")
+  — haiku, given the prior findings in-prompt, simply reported nothing new. Net
+  result is identical (0 duplicate comments) and stronger than the ~0 the plan
+  anticipated; the deterministic offline dedupe/render tests remain the true gate.
+- The `--repo` (TR3 staging cwd) vs `--gh-repo` (gh post target) distinction the
+  plan flagged as a footgun was implemented as two separate args — verified by the
+  `--post --dry-run` test carrying no staging behavior.
+
+**Deviation from the plan (documented):** seed store under `fixtures/`, runtime
+store under `data/` (gitignored) — see the deviation note above. All other paths
+match the PRD.
+
+**MVP status:** all Phase 1–4 acceptance criteria met. The bot is headless (TR1),
+schema-contracted (TR2), CLAUDE.md-contextualized (TR3), precision-engineered
+(TR4/TR5), scales via multipass (TR6/TR7), dedupes across re-runs both structurally
+and semantically (TR8/FR3), generates net-new tests (FR2), and closes the trust
+loop with false-positive instrumentation + category quarantine (TR9/FR4) plus
+opt-in real `gh` posting (FR1).
