@@ -1,0 +1,27 @@
+{
+  "diff": "testgen.diff",
+  "existing_tests": "tests/test_discount.py",
+  "target": {"file": "src/discount.py", "symbol": "apply_discount"},
+  "note": "Answer key for test-gen. NEVER staged (workspace excludes *ground_truth.json).",
+  "cases": [
+    {
+      "id": "happy-path",
+      "should_propose": false,
+      "keywords": ["basic", "happy", "valid", "in-range", "in range", "applies discount"],
+      "note": "Already covered by existing test_apply_discount_basic — must be SKIPPED, not re-proposed."
+    },
+    {
+      "id": "rate-out-of-range",
+      "should_propose": true,
+      "keywords": ["out-of-range", "out of range", "valueerror", "raises", "invalid", "> 1", "< 0", "negative"],
+      "note": "The ValueError branch (rate<0 or rate>1) is uncovered — test-gen MUST propose it (net-new)."
+    },
+    {
+      "id": "rate-boundary",
+      "should_propose": true,
+      "optional": true,
+      "keywords": ["boundary", "zero", "rate 0", "rate 1", "1.0", "0.0", "edge"],
+      "note": "rate==0 / rate==1 boundaries; bonus net-new case, not a hard gate."
+    }
+  ]
+}

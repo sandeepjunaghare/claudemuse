@@ -1,0 +1,9 @@
+{
+  "patterns": {
+    "none-deref":       {"category": "correctness",     "emitted": 12, "dismissed": 0},
+    "speculative-perf": {"category": "performance",     "emitted": 8,  "dismissed": 6},
+    "style-nit":        {"category": "maintainability", "emitted": 10, "dismissed": 7},
+    "rare-guess":       {"category": "security",        "emitted": 2,  "dismissed": 2}
+  },
+  "manual_quarantine": []
+}

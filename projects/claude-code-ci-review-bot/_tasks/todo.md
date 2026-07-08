@@ -1,0 +1,520 @@
+# Tasks
+
+## Phase 1 — Headless + Structured
+
+Plan: `.agents/plans/phase-1-headless-structured.md`
+Goal: prove non-interactive `claude -p` invocation + schema-valid parsing, with
+findings mapped to `file:line`.
+
+### Foundation
+- [x] `requirements.txt` (pytest, python-dotenv, jsonschema — no SDK)
+- [x] `pytest.ini` (testpaths=tests, `integration` marker, no asyncio)
+- [x] `src/review/__init__.py`
+- [x] `src/review/config.py` (`load_env` at `parents[4]`, `REVIEW_MODEL`, `CLAUDE_TIMEOUT_S`, `PROMPT_TEMPLATE`)
+- [x] `src/review/schema.py` (`FINDINGS_SCHEMA`, `as_json_string`, `validate_findings_obj`)
+
+### Core (invoke → parse → emit)
+- [x] `src/review/runner.py` (`invoke_claude` → `RunResult`; stdout/stderr separate; timeout backstop)
+- [x] `src/review/parse.py` (`Location`/`Finding`/`ParsedReview`; `parse_result`; `ParseError`; `structured_output` + fallback)
+- [x] `src/review/post.py` (`format_comment`, `emit`; no gh)
+- [x] `.claude/commands/review/review-diff.md` (versioned prompt, `{diff}` placeholder)
+
+### Integration
+- [x] `src/review/cli.py` (argparse `--diff`/`--model`; frontmatter strip; `.replace("{diff}", …)`; clean exit-1 on every failure)
+- [x] `fixtures/pr-01/sample.diff` (seeded `if match == None:` bug on a list)
+- [x] `Makefile` (`ci-review`, `test`, `test-unit`, `test-integration`; `metrics`/`test-gen` stubs)
+
+### Testing & validation
+- [x] `tests/__init__.py`, `tests/conftest.py` (src/review on path, `load_env`, capability gate)
+- [x] `tests/fixtures/sample_claude_output.json` (recorded golden output)
+- [x] `tests/test_schema.py` (valid schema; enum + required enforcement; round-trip)
+- [x] `tests/test_parse.py` (golden → finding; error envelope; fallback; malformed → ParseError)
+- [x] `tests/test_post.py` (file:line mapping; structural only)
+- [x] `tests/test_cli.py` (timeout/error-envelope/nonzero-rc/missing-file → clean exit-1)
+- [x] `tests/test_runner_live.py` [integration] (real `claude -p`, haiku, no hang)
+
+### Validation results
+- [x] Level 1 — `py_compile` on all modules: **clean**
+- [x] Level 2 — offline unit suite (`-m "not integration"`): **19 passed, 2 deselected**
+- [x] Level 3 — integration (`-m integration`, haiku): **2 passed in ~19.5s**
+- [x] Level 4 — `make ci-review PR=fixtures/pr-01/sample.diff < /dev/null`:
+      **exit 0**, 1 finding at `src/notify.py:7` (seeded bug caught), no hang
+- [x] No `claude-agent-sdk` / `anthropic` / `gh` imports (verified via grep)
+
+## Review
+
+**What worked**
+- The pre-verified CLI contract in the plan (result element → `structured_output`
+  primary, `result` string fallback; stdout/stderr separation) was accurate — the
+  parser worked first try against both the golden fixture and the live CLI.
+- Splitting schema-drives-both-sides (one `FINDINGS_SCHEMA` feeds `--json-schema`
+  and post-hoc validation) means the CLI contract and parser cannot drift.
+- The seeded fixture bug was flagged with a correct, specific finding at the right
+  new-file line — the `file:line` mapping gate holds end-to-end.
+
+**What didn't (and the fix)**
+- The integration test's `from conftest import claude_runnable` failed at
+  collection (`conftest` isn't importable by name). Fixed by inlining the
+  capability check with `shutil.which("claude")` in the test's `pytestmark`.
+- `make` emits harmless `xcrun_db` cache-write warnings under the sandbox; the
+  recipe still runs and exits 0. Cosmetic only.
+
+**Deviations from the plan**
+- Added `tests/test_cli.py` (not in the plan's file list) to cover the CLI-level
+  edge cases the plan's Testing Strategy explicitly required (timeout → exit-1,
+  error envelope → exit-1) without shelling out.
+- Added a minimal `.gitignore` (`__pycache__`, `.pytest_cache`) for hygiene.
+
+**Next**: Phase 2 — Precision (`.agents/plans/phase-2-precision.md`).
+
+## Phase 2 — Precision (TR3 / TR4 / TR5)
+
+Plan: `.agents/plans/phase-2-precision.md`
+Goal: turn the Phase-1 spine into a *precise* reviewer — seeded ground-truth
+fixture, CLAUDE.md as the runtime context channel (TR3), enriched prompt
+(TR4/TR5), and a precision/recall harness with a demonstrable TR3 delta.
+
+### Foundation
+- [x] Verify Phase-1 interfaces present & green (offline 19 passed; `Finding`
+      fields + `invoke_claude` signature match the plan)
+- [x] TR3 auto-load live probe (platypus): `CLAUDE.md` in cwd changes the answer
+- [x] `config.py` — `BASELINE_MODEL`, `FIXTURE_REPO`, `GROUND_TRUTH`,
+      `BASELINE_PROMPT`, `ENRICHED_PROMPT`, `METRICS_DIR`, `LINE_MATCH_TOLERANCE`
+- [x] `severity.py` — `normalize_severity`, `PATTERN_SEVERITY` override,
+      `canonical_severity`, `apply_canonical_severity`, `sort_by_severity` (pure)
+- [x] `workspace.py` — `stage_workspace`/`staged`/`cleanup_workspace` (TR3
+      isolation under `$TMPDIR`; excludes `ground_truth.json`, `*.diff`,
+      `__pycache__`; temp-dir footgun guard)
+
+### Fixture & prompt (ground truth + the lever)
+- [x] `fixtures/sample-repo/src/orders.py` — REAL bug (None-deref, must flag)
+- [x] `fixtures/sample-repo/src/settings.py` — convention-dependent (broad
+      `except` by policy, must NOT flag when CLAUDE.md present) — the TR3 lever
+- [x] `fixtures/sample-repo/src/{ingest,summary}.py` — cross-file key mismatch
+- [x] `pr.diff` (all four files) + `pr-02.diff` (re-introduces None-deref class)
+- [x] `ground_truth.json` (answer key; cross-file case accepts producer OR
+      consumer location)
+- [x] `fixtures/sample-repo/CLAUDE.md` — runtime context (settings-total policy);
+      convention lives ONLY here, never in the source files
+- [x] `review-diff.baseline.md` (verbatim P1 snapshot) + enriched `review-diff.md`
+      (explicit flag/don't-flag + few-shot + severity rubric w/ examples)
+
+### Scoring & integration
+- [x] `runner.py` — added optional `cwd` (backward-compatible; the TR3 lever)
+- [x] `metrics.py` — pure scorer (`score`/`match`/`format_report`) + live driver
+      (`run_variant`/`run_metrics`/`run_tr3_demo`)
+- [x] `cli.py` — `--prompt {enriched,baseline}`, `--repo`, canonical severity +
+      sort before emit (P1 default behavior preserved)
+- [x] `Makefile` — `metrics` + `tr3-demo` targets
+
+### Testing & validation
+- [x] `test_severity.py` (offline) — aliases, pattern override, no-mutation, sort
+- [x] `test_metrics.py` (offline) — TP/FP/FN, precision/recall/F1, integration
+      exclusion, bonus (known-gap) scoring, multi-location, tolerance, suffix path
+- [x] `test_workspace.py` (offline) — includes CLAUDE.md, excludes answer key,
+      under `$TMPDIR`, cleanup refuses non-temp
+- [x] `test_precision_live.py` [integration] — 5 acceptance demos
+
+### Validation results
+- [x] Level 1 — `py_compile` all modules/tests/fixtures: **clean**
+- [x] Level 2 — offline suite (`-m "not integration"`): **53 passed, 7 deselected**
+- [x] Level 3 — integration (`-m integration`, haiku): **5 passed in ~4.5 min**
+- [x] Level 4 — `make metrics` + `make tr3-demo`: deltas produced (below)
+- [x] Level 5 — `make ci-review PR=fixtures/pr-01/sample.diff` (haiku): **exit 0**,
+      seeded bug flagged, canonical severity applied — P1 preserved
+- [x] No `anthropic` / `claude-agent-sdk` / `gh` imports (grep clean)
+
+## Review — Phase 2
+
+**Headline numbers (fixture ground truth, haiku tier):**
+- Precision/recall A/B (baseline vs enriched prompt, CLAUDE.md present in both):
+  **baseline 1.00 / enriched 1.00** (precision & recall). Enriched ≥ baseline
+  gate holds. On a conservative model the baseline is already precise *when it
+  has project context*, so the prompt A/B shows parity, not a jump.
+- **TR3 present-vs-absent delta (the vivid result):** the broad-`except` case is
+  **flagged with CLAUDE.md ABSENT, not flagged with it PRESENT** →
+  `behavior_changed: true`. This is where the precision engineering shows: the
+  project policy in CLAUDE.md is what turns a real-looking FP into a non-finding.
+- Severity **identical** for the None-deref class across `pr.diff` and
+  `pr-02.diff` (guaranteed by `apply_canonical_severity`).
+
+**What worked**
+- Schema-drives-both-sides + the pure/offline scorer meant `test_metrics.py`
+  could prove the metric correct before any live number was trusted.
+- Staging under `$TMPDIR` cleanly isolated the TR3 A/B — the platypus probe
+  confirmed the mechanism up front and de-risked the whole phase.
+- The canonical `PATTERN_SEVERITY` backstop made severity consistency
+  deterministic instead of hoping the model is stable.
+
+**What didn't (and the fixes) — fixture/scorer calibration, per the plan's warning**
+- *The pct-as-fraction lever was dead on haiku.* The model would not infer a
+  percent/fraction unit bug even absent the convention (and my first draft leaked
+  the convention in the source docstrings). Replaced it with a **broad-`except`
+  settings reader**, which haiku reliably flags, exonerated by a CLAUDE.md policy.
+- *The enriched prompt suppressed the TR3 signal.* Being deliberately
+  conservative, it declined the broad-`except` in BOTH arms — nothing for
+  CLAUDE.md to change. Fix: the TR3 demo holds the **baseline** prompt constant
+  (it surfaces the borderline finding, so CLAUDE.md's suppression is observable).
+- *A "false positive" that was really a scorer gap.* The model reported the
+  cross-file bug at the producer (`ingest.py`) while ground truth pinned the
+  consumer (`summary.py`), so it scored as an FP and tanked enriched precision.
+  Fix: the cross-file case accepts **either** location, and a known-gap match is
+  scored as a **bonus, never an FP**.
+
+**Deviation from the plan (documented)**
+- The plan assumed a single pass would MISS the cross-file bug. Empirically, a
+  *whole-diff* single pass has cross-file visibility and a capable model can catch
+  it. Per-file *isolation* (Phase-3 TR6) is what genuinely can't. So the
+  cross-file case is a **known gap** (excluded from single-pass recall, catching
+  it is precision-neutral), and the live test records the catch rather than
+  asserting a flaky "must miss."
+
+**Next**: Phase 3 — Scale + Dedupe (multi-pass TR6/TR7, dedupe TR8, test-gen FR2).
+
+## Phase 3a — Scale + Dedupe (TR6 / TR7 / TR8 / FR3)
+
+Plan: `.agents/plans/phase-3-scale-dedupe.md`
+Goal: turn the Phase-2 single-pass reviewer into one that scales to large PRs
+(per-file passes + a cross-file integration pass) and suppresses duplicate
+comments across re-runs. **Scope: TR6/TR7/TR8/FR3 only** — test-gen (FR2) is
+Phase 3b; `detected_pattern` quarantine (TR9/FR4) + real `gh --post` are Phase 4.
+
+### Foundation
+- [x] Verify P1/P2 interfaces green (offline **53 passed**; `invoke_claude(cwd=)`,
+      `Finding` field order confirmed against disk)
+- [x] `config.py` — `INTEGRATION_PROMPT`, `PRIOR_FINDINGS_DIR`, `DEDUPE_LINE_TOLERANCE=3`
+- [x] `dedupe.py` — pure `_same_file`, `is_duplicate`, `dedupe` (within-run,
+      keep-first), `suppress_prior` → `(new, still_unresolved)` (never raises)
+- [x] `store.py` — `save_findings`/`load_prior` (loss-free `Finding` round-trip;
+      `base_dir` override for tests; missing store → `[]`), `_pr_id`
+
+### Multipass orchestration + integration prompt (TR6/TR7)
+- [x] `multipass.py` — pure `split_diff` (git/`---`/single/empty) + live driver
+      (`_run_pass`, `review_per_file`, `review_integration`, `review_multipass`)
+      + demo drivers (`run_multipass_demo`, `run_dedupe_demo`)
+- [x] `.claude/commands/review/review-integration.md` — cross-file-only prompt
+      (data-flow/contract triggers, one few-shot, TR5 rubric, `{diff}` block)
+
+### Integration (CLI + store wiring + Make)
+- [x] `cli.py` — `--mode {single,multi}` (default single) + `--pr-id` (opt-in
+      dedupe); defaults byte-for-byte preserved; timeout/exit handling intact
+- [x] `Makefile` — `review-multi` + `dedupe-demo` targets (LIVE multi-pass, noted)
+- [x] `data/prior_findings/.gitkeep` + `.gitignore` (`data/prior_findings/*.json`)
+
+### Testing & validation
+- [x] `test_multipass.py` (offline) — split_diff; **N+1 call count** via
+      monkeypatched `invoke_claude` (TR7 proof); per-file isolation; canonical
+      severity collapse; one-error-pass survives
+- [x] `test_dedupe.py` (offline) — is_duplicate table, keep-first, **zero-dup
+      suppression**, empty-pattern fallback, no mutation
+- [x] `test_store.py` (offline) — round-trip, missing→[], dir creation, `_pr_id`
+- [x] `test_multipass_live.py` [integration] — 4 acceptance demos
+
+### Validation results
+- [x] Level 1 — `py_compile` all modules/tests: **clean**
+- [x] Level 2 — offline suite (`-m "not integration"`): **80 passed, 11 deselected**
+      (was 53; +27 new offline)
+- [x] Level 3 — integration (`-m integration` multipass_live, haiku): **4 passed in ~6m37s**
+- [x] Level 4 — `make review-multi`: **precision 1.0 / recall 1.0, tp/fp/fn=2/0/0**,
+      `cross_file_caught_by_integration: true`, settings-broad-except NOT flagged
+- [x] Level 5 — `make ci-review PR=fixtures/pr-01/sample.diff`: **exit 0**, 1
+      finding (P1/P2 default path unchanged); `test_cli.py` green
+- [x] No `anthropic` / `claude-agent-sdk` / `gh` imports (grep clean)
+
+## Review — Phase 3a
+
+**Headline results (fixture ground truth, haiku tier):**
+- **TR6/TR7 (the vivid result):** per-file isolation passes do **NOT** flag the
+  `cross-file-key-mismatch`; the whole-diff **integration pass DOES** → the
+  cross-file bug is caught **only** by the integration pass. Proven both live
+  (`test_multipass_live`) and deterministically offline (the 5-call fan-out with
+  the cross-file finding appearing only from the integration prompt).
+- **Multipass scores clean:** with `single_pass=False`, both `none-deref` (high)
+  and `cross-file-key-mismatch` (critical) are TPs, `settings-broad-except` not
+  flagged (CLAUDE.md present) → **precision 1.0 / recall 1.0, tp/fp/fn=2/0/0**.
+  The cross-file case flipped from a Phase-2 *known gap* to a scored TP.
+- **TR7 proven offline for free:** `review_multipass` makes exactly **5**
+  independent `invoke_claude` calls (4 per-file + 1 integration), asserted via a
+  call counter under a monkeypatched CLI — no `--continue`/`--resume`, no pass
+  consuming another's output.
+
+**What worked**
+- The plan's pre-verified interfaces held exactly (Finding field order,
+  `invoke_claude(cwd=)`, `metrics._same_file`) — the pure modules and the
+  monkeypatched orchestration test worked first try.
+- `apply_canonical_severity` **before** dedupe makes "no contradictory findings"
+  structurally true: the offline test emits `none-deref` at `low` in one pass and
+  `high` in another; the merged result has it **once at high**.
+- The integration pass caught the cross-file bug on **haiku with no prompt
+  calibration** — the anticipated live risk (fallback to sonnet) never triggered.
+
+**What didn't (and the honest result) — dedupe re-run demo**
+- `make dedupe-demo` prints **"duplicate comments on re-run: 1"**, not 0. Cause:
+  the cross-file bug is reportable at **either valid end** (producer `ingest.py`
+  or consumer `summary.py`), and the model picks a *different end* on the second
+  run. The structural key (file + `detected_pattern` + line-tolerance) correctly
+  treats findings on two different files as distinct, so it can't unify them.
+- This is **not a dedupe bug** — the reliably same-location `none-deref` **is**
+  suppressed (0 dup for it), which is exactly what `test_multipass_live`'s
+  re-run test asserts (it pins `none-deref` precisely to avoid this
+  nondeterminism), and `test_dedupe` proves zero-dup deterministically.
+- **Scope note / gap surfaced:** the plan's *narrative* describes a two-layer
+  dedupe (structural backstop **+** prompt-context layer that feeds prior
+  findings into the re-run prompt to catch semantic dupes across drift). Only the
+  **structural layer + persistence** is in the step-by-step tasks, so that is
+  what was built. Wiring prior findings into the review prompt (the second layer)
+  would resolve the cross-end drift and is the natural Phase-3a follow-up / early
+  Phase-4 item — flagged rather than silently scoped in.
+
+**Deviations from the plan**
+- None structural. Implemented exactly the task list; `import json` kept as a
+  local import inside the demo drivers (matches the "demo-driver-local imports"
+  guidance) rather than at module top, keeping the pure core's import surface
+  stdlib+parse/dedupe/severity only.
+
+**Next**: Phase 3b — Test generation (FR2), or Phase 4 — Trust loop (TR9/FR4
+`detected_pattern` quarantine + `gh --post`, plus the prompt-context dedupe layer).
+
+## Phase 3b — Test Generation (FR2)
+
+Plan: `.agents/plans/phase-3b-testgen.md`
+Goal: add the second output path — given a change + its existing tests, propose
+**net-new** tests for uncovered behavior and **skip already-covered** cases. Reuses
+the Phase-1/3a spine (headless `claude -p` TR1, schema-as-contract TR2,
+CLAUDE.md-as-context TR3, two-layer dedupe discipline). **Scope: FR2 only** —
+TR9/FR4 quarantine + real `gh --post` stay Phase 4.
+
+### Foundation
+- [x] Verify P1/2/3a interfaces green (offline **80 passed, 11 deselected**;
+      `invoke_claude(cwd=)`, `Finding` field order confirmed against disk)
+- [x] `config.py` — `TESTGEN_PROMPT`, `TESTGEN_REPO`, `TESTGEN_GROUND_TRUTH`,
+      `TESTGEN_DIFF_NAME`, `TESTGEN_EXISTING_TESTS_NAME`
+- [x] `workspace.py` — one-line `_EXCLUDE_GLOBS` generalization
+      (`ground_truth.json` → `*ground_truth.json`; review staging unaffected)
+- [x] `testgen_schema.py` — distinct `TESTGEN_SCHEMA` (`tests` array) +
+      `as_json_string` + `validate_tests_obj` (TR2)
+
+### Fixture (ground truth — a CORRECT function, coverage not bug-finding)
+- [x] `fixtures/testgen-sample/src/discount.py` — correct `apply_discount` with a
+      guarded `ValueError` branch (the uncovered case)
+- [x] `fixtures/testgen-sample/tests/test_discount.py` — existing HAPPY-PATH-only
+      test (the coverage context); NOT collected by the project run (`testpaths=tests`)
+- [x] `fixtures/testgen-sample/testgen.diff` — new-file diff of `discount.py`
+      (+ lines reproduce the file verbatim; generated programmatically)
+- [x] `fixtures/testgen-sample/CLAUDE.md` — TESTING STANDARDS (the test-gen TR3 channel)
+- [x] `fixtures/testgen-sample/testgen_ground_truth.json` — answer key
+      (happy-path=skip, rate-out-of-range=propose, rate-boundary=optional)
+
+### Core + prompt + driver
+- [x] `testgen.py` pure core — `parse_testgen` (mirrors `parse.parse_result`,
+      reuses `parse.ParseError`), `_same_file`, `existing_test_names`,
+      `dedupe_suggestions` (within-run keep-first), `skip_covered` → `(new, skipped)`
+      (the deterministic FR2 backstop), `score_testgen` (keyword-tolerant)
+- [x] `tests/fixtures/sample_testgen_output.json` — golden CLI output (both
+      `structured_output` + `result`-string forms)
+- [x] `.claude/commands/test-gen/generate-tests.md` — versioned prompt
+      (net-new/skip-covered, honor-CLAUDE.md, one few-shot, `{diff}`+`{existing_tests}`)
+- [x] `testgen.py` live driver — `generate_tests` (ONE `claude -p` pass +
+      within-run dedupe), `format_test`/`emit_tests`, `run_testgen_demo`
+- [x] `Makefile` — `test-gen` stub → `run_testgen_demo` (LIVE, one call)
+
+### Testing & validation
+- [x] `test_testgen_schema.py` (offline) — validity, required/type/additionalProperties
+- [x] `test_testgen.py` (offline) — parse (golden/fallback/error/malformed);
+      `existing_test_names`; `dedupe_suggestions`; **`skip_covered` never re-emits a
+      covered test**; `score_testgen`; **orchestration via monkeypatch** (exactly
+      ONE call; prompt carries both diff + existing tests); answer-key exclusion regression
+- [x] `test_testgen_live.py` [integration] — proposes uncovered error path; skips
+      covered happy path; generated code parses (`ast.parse`)
+
+### Validation results
+- [x] Level 1 — `py_compile` all modules/tests/fixtures: **clean**
+- [x] Level 2 — offline suite (`-m "not integration"`): **113 passed, 14 deselected**
+      (was 80; +33 new offline: 8 schema + 25 testgen)
+- [x] Level 3 — integration (`-m integration` testgen_live, haiku): **3 passed in ~47s**
+- [x] Level 4 — `make test-gen`: **proposed net-new: 4, skipped(covered): 0,
+      covered re-proposed: 0, uncovered error-path proposed: True**;
+      `data/metrics/testgen.json` written (matched: rate-out-of-range + rate-boundary)
+- [x] Level 5 — `make ci-review PR=fixtures/pr-01/sample.diff`: **exit 0**, 1 finding
+      (review default path unchanged); review `ground_truth.json` STILL excluded from staging
+- [x] No `anthropic` / `claude-agent-sdk` / `gh` imports (grep clean)
+
+## Review — Phase 3b
+
+**Headline results (fixture ground truth, haiku tier):**
+- **FR2 net-new (the vivid result):** test-gen proposed **4** net-new tests for
+  the uncovered branches of the correct `apply_discount` — the negative-rate and
+  rate-above-one `ValueError` paths (matching `rate-out-of-range`) plus the
+  `rate==0` / `rate==1` boundaries (the bonus `rate-boundary`). `matched` =
+  `[rate-out-of-range, rate-boundary]`, `missing_required` = `[]`.
+- **FR2 skip-covered (the trust guarantee):** the already-covered happy path was
+  **NOT re-proposed** — `covered case re-proposed (should be 0): 0`,
+  `unexpected == []`. Proven deterministically offline (`skip_covered` routes a
+  colliding suggestion to `skipped`, never to `new`) AND live (the model itself
+  skipped it via the prompt-context layer).
+- **Two-layer skip, honestly observed:** `skipped (already covered): 0` at the
+  structural backstop — because the **prompt-context (semantic) layer already did
+  the skipping**: haiku read `test_apply_discount_basic` in `{existing_tests}` and
+  simply didn't propose a happy-path test. The structural `skip_covered` had
+  nothing left to drop. This is the two layers working as designed (semantic
+  catches it first; structural is the deterministic backstop that the offline
+  test exercises directly).
+- **TR7 / ONE call proven offline for free:** `generate_tests` makes exactly ONE
+  `invoke_claude` call, asserted via a call counter under a monkeypatched CLI, and
+  the single prompt provably carries BOTH the diff and the existing tests.
+
+**What worked**
+- The plan's pre-verified interfaces held exactly (`Finding` field order,
+  `invoke_claude(cwd=)`, `parse.parse_result` shape, `metrics._same_file`,
+  `workspace.staged`), so the mirrored `parse_testgen`, the pure skip/dedupe/score
+  functions, and the monkeypatched orchestration test all worked first try.
+- Reusing `parse.ParseError` (one error type) and copying the ~15-line
+  event-locating logic (house pattern) kept the review contract untouched.
+- The clean, correct fixture (no seeded bug) made the covered-vs-uncovered signal
+  unambiguous — haiku proposed the error path and skipped the happy path with **no
+  prompt calibration** (the anticipated sonnet fallback never triggered).
+- The one-line `*ground_truth.json` glob generalization is non-regressive:
+  `ground_truth.json` is still excluded from review staging (verified), and the
+  new `testgen_ground_truth.json` is never staged.
+
+**What didn't (nothing structural)**
+- No deviations from the plan's task list. The only nuance is the honest
+  `skipped: 0` above — not a failure, but the semantic layer pre-empting the
+  structural one. The `ast.parse` check on generated code was **kept** (haiku
+  emitted clean, runnable pytest for all four suggestions).
+
+**Out of scope (Phase 4):** `detected_pattern` dismissal tracking + category
+quarantine (TR9/FR4); real `gh --post` posting; a generic `make test-gen PR=<path>`
+CLI over an arbitrary project's tests; re-run persistence of test suggestions (the
+existing tests file IS the prior).
+
+**Next**: Phase 4 — Trust loop (TR9/FR4 `detected_pattern` quarantine + `gh --post`,
+plus the prompt-context dedupe layer flagged in the Phase-3a review).
+
+## Phase 4 — Trust Loop (TR9 / FR4 + gh --post + semantic dedupe)
+
+Plan: `.agents/plans/phase-4-trust-loop.md`
+Goal: close the trust loop — dismissed-finding instrumentation + category
+quarantine (TR9/FR4), real `gh` PR posting behind `--post` (FR1), and the
+prompt-context (semantic) dedupe layer that completes the two-layer TR8 design
+and resolves the Phase-3a cross-end drift. **All four sub-features offline-first.**
+
+**Deviation note (documented):** the PRD names a single `data/dismissed_patterns.json`;
+Phase 4 splits it into a **committed seed** (`fixtures/dismissed_patterns.seed.json`,
+the deterministic demo input) and a **gitignored runtime store**
+(`data/dismissed_patterns.json`, accrued dismissals) — a file that is both
+committed and runtime-mutated causes git churn and non-reproducible demos.
+
+### Foundation
+- [x] `config.py` — `DISMISSED_PATTERNS_STORE`, `DISMISSED_PATTERNS_SEED`,
+      `QUARANTINE_RATE_THRESHOLD=0.5`, `QUARANTINE_MIN_SAMPLE=3` (`#:`-doc-commented)
+- [x] `fixtures/dismissed_patterns.seed.json` — 4 patterns / 4 categories; the
+      demo story (perf 0.75 + maint 0.70 quarantine; security 2/2 min-sample-protected;
+      correctness 0/12 clean)
+
+### Core (pure + store I/O)
+- [x] `instrument.py` — `record_emitted`/`record_dismissal` (NEW store, no mutation);
+      `category_dismissal_rates`/`category_sample_sizes` (ZeroDivision-guarded);
+      `auto_quarantined` (rate + min-sample gate); `quarantined_categories` (auto ∪
+      manual); `apply_quarantine` → `(kept, dropped)`; `load_store`/`save_store`
+      (`path=` override; missing → default); thin `main(--dismiss)` ops CLI
+- [x] `post.py` — `format_review_body`, `build_gh_comment_args` (pure argv),
+      `post_via_gh` (injectable `run`; `dry_run` short-circuit). `emit`/`format_comment`
+      byte-for-byte unchanged; `gh` only ever a subprocess argv (never imported)
+- [x] `dedupe.py` — `render_prior_findings` (empty → sentinel; non-empty → stable
+      sorted bullets); two-layer docstring corrected from aspirational → implemented
+
+### Prompts + orchestration wiring
+- [x] `review-diff.md` + `review-integration.md` — `## Previously reported` block +
+      `{prior_findings}` token (baseline prompt UNTOUCHED — frozen metrics arm)
+- [x] `multipass.py` — `prior_findings=` threaded through per-file/integration/
+      multipass; `_run_pass` `prior_text` kwarg; `run_dedupe_demo` feeds run-1 as
+      prior into run-2; `run_quarantine_demo` (OFFLINE)
+- [x] `cli.py` — `_compose_prompt` prior slot; prior loaded once (semantic layer +
+      structural backstop); accumulation `dedupe(prior+current)`; quarantine filter
+      before emit; `--post`/`--pr`/`--gh-repo`/`--dry-run` branch (`--gh-repo` kept
+      distinct from TR3 `--repo`); `import instrument`
+- [x] `.gitignore` (`data/dismissed_patterns.json`); `Makefile` (`quarantine-demo`,
+      `post-dry-run` + `.PHONY`)
+
+### Testing & validation
+- [x] `test_instrument.py` (offline, 16) — store round-trip; record no-mutation;
+      rates on seed shape; **auto_quarantined min-sample gate**; manual override;
+      **apply_quarantine FR4 headline**; seed regression-lock
+- [x] `test_post.py` (extend) — body location coverage; argv shape (±repo);
+      **dry-run never shells out**; executes-when-not-dry via injected fake runner;
+      skip-by-default real-`gh` test (`CI_REVIEW_LIVE_PR`)
+- [x] `test_dedupe.py` (extend) — render sentinel + stable order-independent listing
+- [x] `test_cli.py` (extend) — prompt carries prior slug; quarantine filters before
+      emit; default path unchanged (absent store); `--post` requires `--pr`;
+      `--post --dry-run` prints gh argv
+- [x] `test_dedupe_semantic_live.py` [integration] — two-run multipass with prior
+      injected → 0 new `none-deref`
+
+### Validation results
+- [x] Level 1 — `py_compile` all touched modules + seed JSON load: **clean**
+- [x] Level 2 — offline suite (`-m "not integration"`): **141 passed, 16 deselected**
+      (was 113; +28 offline: 16 instrument + 5 post + 5 cli + 2 dedupe)
+- [x] Level 3 — `test_dedupe_semantic_live.py` [integration, haiku]: **1 passed in ~3m36s**
+- [x] Level 4 — `make quarantine-demo` (OFFLINE): quarantined=`[maintainability,
+      performance]`, correctness+security survive; `make post-dry-run`: prints
+      `DRY RUN — would run: gh pr comment 1 --body …`, posts nothing, exit 0;
+      `make dedupe-demo` (LIVE x2): **duplicate comments on re-run: 0** (was 1)
+- [x] Level 5 — `make ci-review PR=fixtures/pr-01/sample.diff`: **exit 0, 1 finding,
+      no quarantine note** (default path byte-for-byte unchanged); grep for
+      `anthropic`/`claude_agent_sdk`/lib-`gh`: **clean**; `data/dismissed_patterns.json`
+      gitignored
+
+## Review — Phase 4
+
+**Headline results:**
+- **TR9/FR4 quarantine (the FR4 gate), proven deterministically offline:**
+  `apply_quarantine(findings, ["performance","maintainability"])` keeps exactly
+  the correctness + security findings and drops the other two — one noisy category
+  disabled without losing the good ones. The min-sample guard protects a rare
+  100%-dismissed category (`security` 2/2) from nuking the whole category; a
+  `manual_quarantine` entry forces a category regardless of rate.
+- **Semantic dedupe layer (TR8 completion) — the cross-end drift is resolved:**
+  `make dedupe-demo` now prints **duplicate comments on re-run: 0** (Phase 3a was
+  1). Feeding the first run's findings into the `{prior_findings}` prompt slot
+  makes the model report nothing new on the re-run; the structural `suppress_prior`
+  remains the deterministic backstop. Proven live in `test_dedupe_semantic_live`.
+- **`gh --post` real but safe:** `--post` posts via `gh pr comment` only with
+  `--pr`; `--post --dry-run` prints the exact argv and posts nothing; the argv
+  builder + dry-run short-circuit are unit-tested with an injected fake runner (no
+  shell-out in `make test`). Emit stays the default (PRD Risk #6).
+
+**What worked**
+- The pure-core + file-store split (mirroring `dedupe.py`/`store.py`) meant every
+  quarantine/dedupe/post-builder assertion runs offline with no key — the whole
+  trust loop is provable in `make test` (1.2s), with only two live checks
+  (`test_dedupe_semantic_live`, `make dedupe-demo`).
+- The plan's pre-verified idioms held exactly (`Finding` field order, `store.py`
+  `path=`/`base_dir` override, `severity.replace` no-mutation, `str.replace`
+  prompt composition), so `instrument.py` and its 16 tests worked first try; the
+  seed's quarantine story matched the plan's numbers on the first run.
+- The byte-for-byte default-path discipline held: the quarantine filter over an
+  absent runtime store is a no-op, and the `{prior_findings}` sentinel on a
+  no-`--pr-id` run leaves `make ci-review` unchanged (Level 5 confirmed 1 finding,
+  exit 0, no quarantine note).
+
+**What didn't (nothing structural)**
+- No deviations from the plan's task list. The one honest nuance in `dedupe-demo`:
+  the second run returned **0 findings total** (not "2 findings, both suppressed")
+  — haiku, given the prior findings in-prompt, simply reported nothing new. Net
+  result is identical (0 duplicate comments) and stronger than the ~0 the plan
+  anticipated; the deterministic offline dedupe/render tests remain the true gate.
+- The `--repo` (TR3 staging cwd) vs `--gh-repo` (gh post target) distinction the
+  plan flagged as a footgun was implemented as two separate args — verified by the
+  `--post --dry-run` test carrying no staging behavior.
+
+**Deviation from the plan (documented):** seed store under `fixtures/`, runtime
+store under `data/` (gitignored) — see the deviation note above. All other paths
+match the PRD.
+
+**MVP status:** all Phase 1–4 acceptance criteria met. The bot is headless (TR1),
+schema-contracted (TR2), CLAUDE.md-contextualized (TR3), precision-engineered
+(TR4/TR5), scales via multipass (TR6/TR7), dedupes across re-runs both structurally
+and semantically (TR8/FR3), generates net-new tests (FR2), and closes the trust
+loop with false-positive instrumentation + category quarantine (TR9/FR4) plus
+opt-in real `gh` posting (FR1).
